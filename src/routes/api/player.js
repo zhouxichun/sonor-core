@@ -1,22 +1,51 @@
-//const PlayerService = require('../../services/PlayerService');
+async function playerRoutes(fastify, opts) {
+  const { playService } = opts;
 
-async function playerRoutes(fastify) {
-  fastify.get('/player/status', async () => {
-    return await PlayerService.getStatus();
+  fastify.post('/player/list', {
+    schema: {
+      body: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            uuid: { type: 'string' },
+            filepath: { type: 'string' },
+            filename: { type: 'string' },
+            title: { type: 'string' },
+            artist: { type: 'string' },
+            album: { type: 'string' },
+            duration: { type: 'number' },
+            genre: { type: 'string' }
+          }
+        }
+      }
+    }
+  }, async (req) => {
+    const trackList = req.body;
+    // trackList 就是你示例的数组：[{uuid,filepath,...}, ...]
+    await playService.pushList(trackList);
+    return { ok: true };
   });
 
   fastify.post('/player/play', {
     schema: {
-      body: {
-        type: 'object',
-        required: ['filePath'],
-        properties: { filePath: { type: 'string' } }
-      }
+        body: {
+            type: 'object',
+            properties: { uuid: { type: 'string' } }
+        }
     }
   }, async (req) => {
-    await PlayerService.play(req.body.filePath);
-    return {};
+      const { uuid } = req.body;
+      const ok = playService.play(uuid);
+      return { ok };
   });
+
+
+  fastify.get('/player/status', async () => {
+    return await PlayerService.getStatus();
+  });
+
+  
 
   fastify.post('/player/pause', async () => {
     await PlayerService.pause();

@@ -17,41 +17,31 @@ class MpvPlayer extends EventEmitter {
     #isConnected = false;
     #commandQueue = [];
     #currentFile = null;
-    #equalizer = null;
     #buffer = '';
     #lastEmitTime = -1;
     #socketPath;
     #reconnectTimer = null;
-    #options;
+    #updateInterval;
     #currentTimeSec;
 
-    constructor() {
+    constructor(opts = {}) {
         super();
         this.#socketPath = path.join(os.tmpdir(), `mpv-ipc-${process.pid}.sock`);
-        this.#options = {
-            updateInterval: 1000,
-            useEQ: false,
-            volume: 50
-        };
+        this.#updateInterval = opts.updateInterval ?? 1000;
         this.#currentTimeSec = 0;
+    }
+
+    start() {
         this.#spawn();
     }
 
-    useEQ(use = true) {
-        this.#options.useEQ = use;
-        this.#applyEQ();
-    }
-
     setVolume(vol) {
-        this.#options.volume = Math.min(Math.max(vol, 0), 100);
-        this.#sendCommand(['set_property', 'volume', this.#options.volume]);
+        const safeVol = Math.min(Math.max(vol, 0), 100);
+        this.#sendCommand(['set_property', 'volume', safeVol]);
     }
 
-    mute() { this.#sendCommand(["cycle", "mute"]); }
-
-    setEqualizer(eq) {
-        this.#equalizer = eq;
-        this.#applyEQ();
+    mute() {
+        this.#sendCommand(["cycle", "mute"]);
     }
 
     play(audioFile) {
@@ -71,38 +61,50 @@ class MpvPlayer extends EventEmitter {
         this.#sendCommand(['stop']);
     }
 
-    seek(pos) { this.#sendCommand(['seek', Math.max(pos, 0), 'absolute']); }
-
-    pause() { this.#sendCommand(["cycle", "pause"]); }
-
-    destroy() {
-        if (this.#reconnectTimer) {
-            clearTimeout(this.#reconnectTimer);
-            this.#reconnectTimer = null;
-        }
-        this.#sendCommand(['quit']);
-        setTimeout(() => this.#cleanup(), 200);
-        this.removeAllListeners();
+    seek(pos) {
+        this.#sendCommand(['seek', Math.max(pos, 0), 'absolute']);
     }
 
-    onCurrentTimeUpdated(callback) { return this.on(MpvPlayer.EVENTS.CURRENTTIME_UPDATED, callback); }
-    onEnd(callback) { return this.on(MpvPlayer.EVENTS.END, callback); }
-    onError(callback) { return this.on(MpvPlayer.EVENTS.ERROR, callback); }
+    pause() {
+        this.#sendCommand(["cycle", "pause"]);
+    }
 
-    // ========== 内部私有方法 ==========
+    async destroy() {
+        this.removeAllListeners();
+        this.#sendCommand(['quit']);
+        await new Promise(resolve => setTimeout(resolve, 200));
+        this.#cleanup();
+    }
+
+    onCurrentTimeUpdated(callback) {
+        return this.on(MpvPlayer.EVENTS.CURRENTTIME_UPDATED, callback);
+    }
+
+    onEnd(callback) {
+        return this.on(MpvPlayer.EVENTS.END, callback);
+    }
+
+    onError(callback) {
+        return this.on(MpvPlayer.EVENTS.ERROR, callback);
+    }
+
+    setEQ(eqString) {
+        this.#sendCommand(['set_property', 'af', eqString || '']);
+    }
+
+
+    setLoop(enable) {
+        const val = enable ? 'yes' : 'no';
+        this.#sendCommand(['set', 'loop-file', val]);
+    }
+
     #updateCurrentTime(data) {
         const sec = data == null ? 0 : parseFloat((data || 0).toFixed(2));
         this.#currentTimeSec = sec;
-        if (this.#lastEmitTime < 0 || (sec - this.#lastEmitTime) * 1000 > this.#options.updateInterval) {
+        if (this.#lastEmitTime < 0 || (sec - this.#lastEmitTime) * 1000 > this.#updateInterval) {
             this.#lastEmitTime = sec;
             this.emit(MpvPlayer.EVENTS.CURRENTTIME_UPDATED, this.#currentTimeSec);
         }
-    }
-
-    #applyEQ() {
-        this.#options.useEQ
-            ? this.#sendCommand(['set_property', 'af', this.#equalizer || ''])
-            : this.#sendCommand(['set_property', 'af', '']);
     }
 
     #spawn() {
@@ -113,6 +115,7 @@ class MpvPlayer extends EventEmitter {
         ], { stdio: ['ignore', 'ignore', 'pipe'] });
 
         this.#player.stderr.on('data', d => console.log('[MPV stderr]', d.toString().trim()));
+
         this.#player.on('exit', (code, signal) => {
             console.log(`[MpvPlayer] Exit: code=${code}, signal=${signal}`);
             this.#cleanup();
@@ -121,6 +124,7 @@ class MpvPlayer extends EventEmitter {
                 this.#reconnectTimer = setTimeout(() => this.#spawn(), 1000);
             }
         });
+
         this.#connectSocket();
     }
 
@@ -131,21 +135,24 @@ class MpvPlayer extends EventEmitter {
                 return;
             }
             this.#socket = net.createConnection(this.#socketPath);
+
             this.#socket.on('connect', () => {
                 this.#isConnected = true;
                 console.log('[MpvPlayer] IPC Connected');
                 this.#setupObservations();
                 this.#flushQueue();
-                setTimeout(() => {
-                    this.#sendCommand(['set_property', 'volume', this.#options.volume]);
-                    this.#applyEQ();
-                }, 100);
             });
+
             this.#socket.on('data', chunk => this.#handleData(chunk.toString()));
+
             this.#socket.on('error', err => console.warn('[MpvPlayer] Socket error:', err.message));
+
             this.#socket.on('end', () => {
                 console.log('[MpvPlayer] Socket disconnected');
                 this.#isConnected = false;
+                if (!this.#reconnectTimer) {
+                    this.#reconnectTimer = setTimeout(() => this.#connectSocket(), 1000);
+                }
             });
         };
         tryConnect();
@@ -194,8 +201,13 @@ class MpvPlayer extends EventEmitter {
 
     #handleMessage(msg) {
         if (msg.event === 'playback-restart') return;
-        if (msg.event === 'end-file') return;
+        if (msg.event === 'end-file') {
+            this.emit(MpvPlayer.EVENTS.END);
+            this.#currentFile = null;
+            return;
+        }
         if (msg.event !== 'property-change') return;
+
         switch (msg.name) {
             case 'time-pos':
                 this.#updateCurrentTime(msg.data);

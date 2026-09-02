@@ -8,11 +8,12 @@
     "dev": "node --watch src/index.js"
   },
   "dependencies": {
-    "@fastify/cors": "^10.0",
+    "@fastify/cors": "^10.1.0",
     "@fastify/websocket": "^11.3.0",
     "dotenv": "^16.4",
-    "fastify": "^5.0",
-    "music-metadata": "^11.15.0"
+    "fastify": "^5.12.1",
+    "music-metadata": "^11.15.0",
+    "uuid": "^14.0.2"
   },
   "license": "MIT"
 }

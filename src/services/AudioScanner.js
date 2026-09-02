@@ -1,102 +1,106 @@
-// src/services/AudioScanner.js
 const fs = require('fs').promises;
 const path = require('path');
 const { EventEmitter } = require('events');
 const MusicMetadata = require('music-metadata');
-
 const DEFAULT_AUDIO_EXT = new Set(['.mp3', '.flac', '.wav', '.ogg', '.m4a', '.aac', '.ape']);
+const crypto = require('crypto'); 
 
 class AudioScanner extends EventEmitter {
-    #_targetFolderPath;
-    #_folderItem;
-    #_audioExtSet;
-    #_scanning;
-    #_abort;
-    #_existingFilePaths; // 扫描启动时构建
+    #targetFolderPath;
+    #audioExtSet;
+    #scanning;
+    #abort;
+    #existFiles;
+    #addedCount;
+    #bufferSize;
+    #bufferItems;
 
     /**
-     * 单文件夹扫描器，强耦合：直接修改传入 folderItem.traces
+     * 单目录音频扫描器
      * @param {string} folderPath 扫描目录绝对路径
-     * @param {object} folderItem 上层引用 {folder:string, traces:[]}
+     * @param {string[]} existingPaths 已入库音频文件完整路径数组，扫描时跳过
      * @param {Set<string>} [audioExtSet] 音频后缀集合
+     * @param {number} [bufferSize=50] 批量缓冲区大小，攒够该数量触发scan:buffer事件
      */
-    constructor(folderPath, folderItem, audioExtSet = DEFAULT_AUDIO_EXT) {
+    constructor(folderPath, existFiles, audioExtSet = DEFAULT_AUDIO_EXT, bufferSize = 50) {
         super();
-        this.#_targetFolderPath = folderPath;
-        this.#_folderItem = folderItem;
-        this.#_audioExtSet = audioExtSet;
-
-        this.#_scanning = false;
-        this.#_abort = false;
-        this.#_existingFilePaths = new Set();
+        this.#targetFolderPath = folderPath;
+        this.#audioExtSet = audioExtSet;
+        this.#scanning = false;
+        this.#abort = false;
+        this.#existFiles = new Set(existFiles);
+        this.#addedCount = 0;
+        this.#bufferSize = bufferSize;
+        this.#bufferItems = [];
     }
 
     async start() {
-        if (this.#_scanning) return;
-        this.#_scanning = true;
-        this.#_abort = false;
-
-        // 扫描启动瞬间快照旧文件集合
-        this.#_existingFilePaths = new Set(this.#_folderItem.traces.map(t => t.path));
-
+        if (this.#scanning) return;
+        this.#scanning = true;
+        this.#abort = false;
+        this.#addedCount = 0;
+        this.#bufferItems = [];
         try {
-            await this.#_scanDir(this.#_targetFolderPath);
-            if (!this.#_abort) {
-                // 计算本次新增数量
-                const addedCount = this.#_folderItem.traces.length - this.#_existingFilePaths.size;
-                this.emit('scan:finish', this.#_targetFolderPath, addedCount);
+            await this.#scanDir(this.#targetFolderPath);
+            await this.#flushBuffer();
+            if (!this.#abort) {
+                this.emit('scan:finish', this.#targetFolderPath, this.#addedCount);
             }
         } catch (err) {
-            this.emit('scan:error', this.#_targetFolderPath, err);
+            await this.#flushBuffer();
+            this.emit('scan:error', this.#targetFolderPath, err);
         } finally {
-            this.#_scanning = false;
+            this.#scanning = false;
         }
     }
 
-
     stop() {
-        this.#_abort = true;
+        this.#abort = true;
     }
 
-    getStatus() {
-        return {
-            scanning: this.#_scanning,
-            abort: this.#_abort,
-            folderPath: this.#_targetFolderPath
-        };
+    /**
+     * 强制刷出缓冲区，触发scan:buffer事件，清空本地buffer
+     */
+    async #flushBuffer() {
+        if (this.#bufferItems.length === 0) return;
+        const items = [...this.#bufferItems];
+        this.#bufferItems = [];
+        this.emit('scan:buffer', items);
     }
 
-    async #_scanDir(dir) {
-        if (this.#_abort) return;
+    async #scanDir(dir) {
+        if (this.#abort) return;
         const entries = await fs.readdir(dir, { withFileTypes: true });
-
         for (const entry of entries) {
-            if (this.#_abort) return;
-
+            if (this.#abort) return;
             const fullPath = path.join(dir, entry.name);
             if (entry.isDirectory()) {
-                await this.#_scanDir(fullPath);
+                await this.#scanDir(fullPath);
             } else if (entry.isFile()) {
                 const ext = path.extname(entry.name).toLowerCase();
-                if (!this.#_audioExtSet.has(ext)) continue;
-
-                // 扫描启动那一刻已经存在的文件，跳过元解析
-                if (this.#_existingFilePaths.has(fullPath)) {
-                    continue;
-                }
-
-                const trace = await this.#_parseSingleFile(fullPath).catch(() => null);
+                if (!this.#audioExtSet.has(ext)) continue;
+                if (this.#existFiles.has(fullPath)) continue;
+                const trace = await this.#parseSingleFile(fullPath)
+                    .catch((err) => {
+                        console.warn(`parse failed: ${fullPath}`, err.message);
+                        return null;
+                    });
                 if (trace) {
-                    this.#_folderItem.traces.push(trace);
+                    this.#addedCount++;
+                    this.#bufferItems.push(trace);
+                    if (this.#bufferItems.length >= this.#bufferSize) {
+                        await this.#flushBuffer();
+                    }
                 }
             }
         }
     }
 
-    async #_parseSingleFile(filePath) {
+    async #parseSingleFile(filePath) {
         const meta = await MusicMetadata.parseFile(filePath, { duration: true });
         return {
-            path: filePath,
+            uuid: crypto.randomUUID(),
+            filepath: filePath,
             filename: path.basename(filePath),
             title: meta.common.title ?? path.basename(filePath, path.extname(filePath)),
             artist: meta.common.artist ?? '',
