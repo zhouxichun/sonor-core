@@ -1,14 +1,15 @@
 const fastify = require('fastify')({ logger: true });
 const AudioLibraryService = require('./services/AudioLibraryService');
 const PlayService = require('./services/PlayService');
+
 const fsSync = require('fs');
 const path = require('path');
-const fastifyStatic = require('@fastify/static');
 
 const dataPath = path.join(__dirname, '../data');
 if (!fsSync.existsSync(dataPath)) {
   fsSync.mkdirSync(dataPath, { recursive: true });
 }
+
 const audioLibraryService = new AudioLibraryService({
   dataPath: dataPath
 });
@@ -22,14 +23,6 @@ async function registerPlugins() {
     credentials: true
   });
   await fastify.register(require('@fastify/websocket'));
-
-  // 静态资源托管：public目录，根路径访问前端页面
-  await fastify.register(fastifyStatic, {
-    root: path.join(__dirname, './public'),
-    prefix: '/',
-    index: 'index.html',
-    decorateReply: false
-  });
 
   // 统一api响应包装，直接挂载根实例
   fastify.addHook('onSend', async (request, reply, payload) => {
@@ -60,16 +53,21 @@ async function registerRoutes() {
 async function createApp() {
   await registerPlugins();
   await registerRoutes();
+
   fastify.addHook('onReady', async () => {
+    // 移除setTimeout，路由就绪后直接启动服务
     await audioLibraryService.start();
     await playService.start();
     fastify.log.info('All Service started');
   });
+
   fastify.addHook('onClose', async () => {
+    // await等待异步销毁完成
     await audioLibraryService.destroy();
     await playService.destroy();
     fastify.log.info('All services destroyed');
   });
+
   return fastify;
 }
 
@@ -79,6 +77,7 @@ process.on('SIGINT', async () => {
   await fastify.close();
   process.exit(0);
 });
+
 process.on('SIGTERM', async () => {
   fastify.log.info('Received SIGTERM, shutting down...');
   await fastify.close();

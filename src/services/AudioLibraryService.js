@@ -27,9 +27,9 @@ class AudioLibraryService extends SonorService {
         this.#usbDriver = new UsbDriver();
 
         this.#usbDriver.onUsbFound(async (devices) => {
+            console.info(`USB devices found: ${devices.length} devices`);
             for (const device of devices) {
                 try {
-                    console.log('Usb found:', device);
                     await this.#addFolder(device.path);
                 } catch (err) {
                     console.warn('addFolder error', err.message);
@@ -50,7 +50,7 @@ class AudioLibraryService extends SonorService {
                 ...item,
                 status: 'unmounted'
             }));
-            console.log(`AudioLibrary loaded.`);
+            console.info(`AudioLibrary loaded from store.`);
         } catch (e) {
             console.warn('AudioLibrary load failed, reset library', e.message);
             this.#audios = [];
@@ -183,7 +183,6 @@ class AudioLibraryService extends SonorService {
             );
         }
 
-        const total = list.length;
         // 分页切片
         if (typeof limit === 'number') {
             list = list.slice(offset, offset + limit);
@@ -191,10 +190,7 @@ class AudioLibraryService extends SonorService {
             list = list.slice(offset);
         }
 
-        return {
-            total,
-            list
-        };
+        return list;
     }
 
     getTrackByUuid(uuid) {
@@ -224,7 +220,9 @@ class AudioLibraryService extends SonorService {
             const name = (t.artist || '未知艺术家').trim();
             map.set(name, (map.get(name) || 0) + 1);
         }
+
         return Array.from(map.entries()).map(([name, count]) => ({ name, count }));
+
     }
 
     /**

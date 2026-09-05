@@ -17,32 +17,24 @@ class SonorService extends EventEmitter {
      */
     constructor(opts) {
         super();
-        if (!opts?.dataPath) {
-            throw new Error(`${this.constructor.name}: opts.dataPath is required`);
-        }
+        if (!opts?.dataPath) { throw new Error(`${this.constructor.name}: opts.dataPath is required`); }
         this.#dataPath = opts.dataPath;
         if (!fsSync.existsSync(this.#dataPath)) {
             throw new Error(`${this.constructor.name}: dataPath "${this.#dataPath}" does not exist`);
         }
     }
 
-    get dataPath() {
-        return this.#dataPath;
-    }
+    get dataPath() { return this.#dataPath; }
 
     /**
      * 服务启动，子类重写实现初始化逻辑
      */
-    async start() {
-        // override by subclass
-    }
+    async start() {}
 
     /**
      * 服务销毁：清除全部事件监听，子类可扩展释放资源
      */
-    async destroy() {
-        this.removeAllListeners();
-    }
+    async destroy() { this.removeAllListeners(); }
 }
 
 module.exports = SonorService;

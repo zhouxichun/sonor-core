@@ -4,6 +4,10 @@ const fsSync = require('fs');
 const MpvPlayer = require('./MpvPlayer');
 const path = require('path');
 class PlayService extends SonorService {
+    static EVENTS = {
+        STATUS: 'playService:status',
+        CURRENTTIME_UPDATED: 'mpvplayer:currenttime_updated'
+    };
     #mpvPlayer;
     /** 持久化数据：落地playstate.json */
     #persistData = {
@@ -26,27 +30,68 @@ class PlayService extends SonorService {
     constructor(opts = {}) {
         super(opts);
         this.#dataFile = path.join(this.dataPath, 'playstate.json');
-
         this.#mpvPlayer = new MpvPlayer({ updateInterval: 1000 });
+        this.#mpvPlayer.onPlay(() => {
+            this.#playing = true;
+            this.#paused = false;
+            this.#emitStatus();
+        });
         this.#mpvPlayer.onCurrentTimeUpdated((sec) => {
-            console.log('mpv current time updated', sec);
-            this.emit('player:time', sec);
+            this.emit(PlayService.EVENTS.CURRENTTIME_UPDATED, sec);
         });
         this.#mpvPlayer.onEnd(() => {
-            console.log('mpv end');
-            this.playNext();
+            this.#playing = false;
+            this.#paused = false;
+            this.#emitStatus();
+            this.playNext(1).catch(err => console.error('playNext err', err));
+        });
+        this.#mpvPlayer.onStop(() => {
+            this.#playing = false;
+            this.#paused = false;
+            this.#emitStatus();
+        });
+        // 暂停状态完全由mpv事件同步，不手动猜测
+        this.#mpvPlayer.onPauseToggle((paused) => {
+            this.#paused = paused;
+            this.#emitStatus();
+        });
+        // 静音状态完全由mpv事件同步
+        this.#mpvPlayer.onMuteToggle((muted) => {
+            this.#muted = muted;
+            this.#emitStatus();
         });
         this.#mpvPlayer.onError((err) => {
             console.log('mpv error', err);
+            this.#emitStatus();
         });
     }
+
+    #emitStatus() {
+        this.emit(PlayService.EVENTS.STATUS, this.getStatus());
+    }
+
+    getStatus() {
+        return {
+            currentIndex: this.#persistData.currentIndex,
+            eq: this.#persistData.eq,
+            volume: this.#persistData.volume,
+            loop: this.#persistData.loop,
+            random: this.#persistData.random,
+            paused: this.#paused,
+            playing: this.#playing,
+            muted: this.#muted
+        };
+    }
+
     async start() {
         await this.#loadState();
-        this.#mpvPlayer.start();
+        this.#mpvPlayer.init();
         this.#mpvPlayer.setVolume(this.#persistData.volume);
         this.#mpvPlayer.setEQ(this.#persistData.eq);
         this.#mpvPlayer.setLoop(this.#persistData.loop);
+        this.#emitStatus();
     }
+
     /**
      * 从磁盘加载持久化数据
      */
@@ -61,6 +106,7 @@ class PlayService extends SonorService {
             console.warn('PlayService load state failed:', err.message);
         }
     }
+
     /**
      * 保存持久化数据到磁盘
      */
@@ -72,6 +118,7 @@ class PlayService extends SonorService {
             console.warn('PlayService save state failed:', err.message);
         }
     }
+
     #calcIndex(direction) {
         let next = -1;
         const len = this.#persistData.playlist.length;
@@ -99,12 +146,15 @@ class PlayService extends SonorService {
         }
         this.#persistData.playlist.push(...trackList);
         await this.#saveState();
+        this.#emitStatus();
     }
 
     async clearPlaylist() {
+        this.#mpvPlayer.stop();
         this.#persistData.playlist = [];
         this.#persistData.currentIndex = -1;
         await this.#saveState();
+        this.#emitStatus();
     }
 
     /**
@@ -117,102 +167,198 @@ class PlayService extends SonorService {
         }
         const removeSet = new Set(uuidArray);
         const oldList = this.#persistData.playlist;
-        // 过滤掉需要删除的项
         const newList = oldList.filter(item => !removeSet.has(item.uuid));
-
-        // 判断当前index对应的条目是否被删掉
         const currentItem = oldList[this.#persistData.currentIndex];
         if (currentItem && removeSet.has(currentItem.uuid)) {
             this.#persistData.currentIndex = -1;
+            this.#mpvPlayer.stop(); 
         }
-
         this.#persistData.playlist = newList;
         await this.#saveState();
+        this.#emitStatus();
     }
 
     /**
-     * 播放，不传uuid则播放下一曲；传入uuid则播放对应曲目
-     * @param {string} [uuid] - 可选，曲目uuid
+     * 播放当前曲目
+     * @returns {Promise<boolean>}
+     */
+    async playPause() {
+        if (!this.#playing) {
+            if(this.#persistData.playlist.length === 0) return false;
+            const idx = this.#persistData.currentIndex;
+            if (idx === -1 || idx >= this.#persistData.playlist.length)
+                idx = 0;
+            return await this.#playByIndex(idx);
+        }else{
+           this.#mpvPlayer.togglePause();
+           return true; 
+        }
+    }
+    /**
+     * 通过uuid播放曲目
+     * @param {string} uuid
+     * @returns {Promise<boolean>}
+     */
+    async playByUuid(uuid) {
+        const idx = this.#persistData.playlist.findIndex(item => item.uuid === uuid);
+        if (idx === -1) return false;
+        return await this.#playByIndex(idx);
+    }
+
+    /**
+     * 停止播放
      * @returns {boolean}
      */
-    play(uuid) {
-        let idx;
-        if (uuid) {
-            idx = this.#persistData.playlist.findIndex(item => item.uuid === uuid);
-            if (idx === -1) return false;
-        } else {
-            idx = this.#calcIndex(1);
-            if (idx === -1) return false;
+    stop() {
+        if (!this.#playing) {
+            return false;
         }
-        return this.playByIndex(idx);
+        this.#mpvPlayer.stop();
+        return true;
     }
 
-    playPrevious() {
-        const idx = this.#calcIndex(-1);
+    /**
+     * 播放下一曲/上一曲
+     * @param {number} dir 1=下一曲，-1=上一曲
+     * @returns {Promise<boolean>}
+     */
+    async playNext(dir) {
+        const idx = this.#calcIndex(dir);
         if (idx === -1) return false;
-        return this.playByIndex(idx);
+        return await this.#playByIndex(idx);
     }
 
-    playByIndex(index) {
+    /**
+     * @param {number} index
+     * @returns {Promise<boolean>}
+     */
+    async #playByIndex(index) {
         const item = this.#persistData.playlist[index];
         if (!item || !item.filepath) return false;
         this.#persistData.currentIndex = index;
-        this.#saveState();
+        await this.#saveState();
+        if (this.#playing) {
+            this.stop();
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
         this.#mpvPlayer.play(item.filepath);
-        this.#playing = true;
         return true;
     }
-    pause() {
-        this.#mpvPlayer.pause();
-        this.#paused = true;
-        return this;
+
+    /**
+     * 切换暂停/播放
+     * @returns {boolean}
+     */
+    togglePause() {
+        if (!this.#playing) return false;
+        this.#mpvPlayer.togglePause();
+        return true;
     }
-    stop() {
-        this.#mpvPlayer.stop();
-        this.#playing = false;
-        this.#paused = false;
-        return this;
-    }
+
+    /**
+     * 跳转播放位置
+     * @param {number} pos 秒
+     * @returns {boolean}
+     */
     seek(pos) {
+        if (!this.#playing) return false;
         this.#mpvPlayer.seek(pos);
-        return this;
+        return true;
     }
-    setVolume(vol) {
-        this.#persistData.volume = Math.min(Math.max(vol, 0), 100);
-        this.#mpvPlayer.setVolume(this.#persistData.volume);
-        this.#saveState();
-        return this;
+
+    /**
+     * 设置音量
+     * @param {number} vol 0‑100
+     * @returns {Promise<boolean>}
+     */
+    async setVolume(vol) {
+        const val = Math.min(Math.max(vol, 0), 100);
+        this.#persistData.volume = val;
+        this.#mpvPlayer.setVolume(val);
+        await this.#saveState();
+        this.#emitStatus();
+        return true;
     }
-    mute() {
-        this.#mpvPlayer.mute();
-        this.#muted = !this.#muted;
-        return this;
+
+    /**
+     * 切换静音
+     * @returns {boolean}
+     */
+    toggleMute() {
+        if (!this.#playing) return false;
+        this.#mpvPlayer.toggleMute();
+        return true;
     }
-    setEQ(eqStr) {
+
+    /**
+     * 设置均衡器参数
+     * @param {string} eqStr
+     * @returns {Promise<boolean>}
+     */
+    async setEQ(eqStr) {
         this.#persistData.eq = eqStr ?? '';
         this.#mpvPlayer.setEQ(this.#persistData.eq);
-        this.#saveState();
-        return this;
+        await this.#saveState();
+        this.#emitStatus();
+        return true;
     }
-    setLoop(enable) {
-        this.#persistData.loop = Boolean(enable);
+
+    /**
+     * 设置循环播放（开关切换）
+     * @returns {Promise<boolean>}
+     */
+    async loop() {
+        this.#persistData.loop = !this.#persistData.loop;
         this.#mpvPlayer.setLoop(this.#persistData.loop);
-        this.#saveState();
-        return this;
+        await this.#saveState();
+        this.#emitStatus();
+        return this.#persistData.loop;
     }
-    setRandom(enable) {
-        this.#persistData.random = Boolean(enable);
-        this.#saveState();
-        return this;
+
+    /**
+     * 设置随机播放（开关切换）
+     * @returns {Promise<boolean>}
+     */
+    async random() {
+        this.#persistData.random = !this.#persistData.random;
+        await this.#saveState();
+        this.#emitStatus();
+        return this.#persistData.random;
     }
+
     getPlaylist() {
         return [...this.#persistData.playlist];
     }
+
+    getCurrentTrack() {
+        const idx = this.#persistData.currentIndex;
+        const list = this.#persistData.playlist;
+        if(idx <0 || idx >= list.length) return null;
+        return {...list[idx]};
+    }
+
+    /**
+     * @param {(payload: any)=>void} callback
+     */
+    onTimeUpdated(callback) {
+        return this.on(PlayService.EVENTS.CURRENTTIME_UPDATED, callback);
+    }
+
+    /**
+     * @param {(payload: any)=>void} callback
+     */
+    onStateUpdated(callback) {
+        return this.on(PlayService.EVENTS.STATUS, callback);
+    }
+
     async destroy() {
-        await super.destroy();
+        try {
+            await super.destroy();
+        } catch (e) {
+            console.warn('PlayService super destroy error', e);
+        }
         this.#mpvPlayer.removeAllListeners();
         await this.#mpvPlayer.destroy();
-        await this.#saveState();
     }
 }
 module.exports = PlayService;

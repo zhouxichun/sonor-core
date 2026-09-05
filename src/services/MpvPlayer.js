@@ -7,8 +7,12 @@ const EventEmitter = require('events');
 
 class MpvPlayer extends EventEmitter {
     static EVENTS = {
+        PLAY: 'mpvplayer:play',    // 曲目开始播放(playback‑restart)
         CURRENTTIME_UPDATED: 'mpvplayer:currenttime_updated',
-        END: 'mpvplayer:end',
+        END: 'mpvplayer:end',      // 自然播放完毕 eof
+        STOP: 'mpvplayer:stop',    // 主动stop / loadfile replace切歌
+        PAUSE_TOGGLE: 'mpvplayer:pause_toggle', // 暂停状态切换，参数 isPaused: boolean
+        MUTE_TOGGLE: 'mpvplayer:mute_toggle',   // 静音状态切换，参数 isMute: boolean
         ERROR: 'mpvplayer:error'
     };
 
@@ -31,17 +35,27 @@ class MpvPlayer extends EventEmitter {
         this.#currentTimeSec = 0;
     }
 
-    start() {
+    /**
+     * @param {Object} [opts={}]
+     * @param {boolean} [opts.loop=false]
+     * @param {number} [opts.volume=80]
+     * @param {string} [opts.eq='']
+     */
+    init() {
         this.#spawn();
     }
 
     setVolume(vol) {
-        const safeVol = Math.min(Math.max(vol, 0), 100);
-        this.#sendCommand(['set_property', 'volume', safeVol]);
+        this.#sendCommand(['set_property', 'volume',  Math.min(Math.max(vol, 0), 100)]);
     }
 
-    mute() {
-        this.#sendCommand(["cycle", "mute"]);
+    setEQ(eqString) {
+        this.#sendCommand(['set_property', 'af', eqString || '']);
+    }
+
+    setLoop(enable) {
+        const val = enable ? 'yes' : 'no';
+        this.#sendCommand(['set', 'loop-file', val]);
     }
 
     play(audioFile) {
@@ -63,10 +77,15 @@ class MpvPlayer extends EventEmitter {
 
     seek(pos) {
         this.#sendCommand(['seek', Math.max(pos, 0), 'absolute']);
+        this.#sendCommand(['set_property', "pause", false]);
     }
 
-    pause() {
+    togglePause() {
         this.#sendCommand(["cycle", "pause"]);
+    }
+
+    toggleMute() {
+        this.#sendCommand(["cycle", "mute"]);
     }
 
     async destroy() {
@@ -74,6 +93,10 @@ class MpvPlayer extends EventEmitter {
         this.#sendCommand(['quit']);
         await new Promise(resolve => setTimeout(resolve, 200));
         this.#cleanup();
+    }
+
+    onPlay(callback) {
+        return this.on(MpvPlayer.EVENTS.PLAY, callback);
     }
 
     onCurrentTimeUpdated(callback) {
@@ -84,24 +107,30 @@ class MpvPlayer extends EventEmitter {
         return this.on(MpvPlayer.EVENTS.END, callback);
     }
 
+    onStop(callback) {
+        return this.on(MpvPlayer.EVENTS.STOP, callback);
+    }
+
+    onPauseToggle(callback) {
+        return this.on(MpvPlayer.EVENTS.PAUSE_TOGGLE, callback);
+    }
+
+    onMuteToggle(callback) {
+        return this.on(MpvPlayer.EVENTS.MUTE_TOGGLE, callback);
+    }
+
     onError(callback) {
         return this.on(MpvPlayer.EVENTS.ERROR, callback);
-    }
-
-    setEQ(eqString) {
-        this.#sendCommand(['set_property', 'af', eqString || '']);
-    }
-
-
-    setLoop(enable) {
-        const val = enable ? 'yes' : 'no';
-        this.#sendCommand(['set', 'loop-file', val]);
     }
 
     #updateCurrentTime(data) {
         const sec = data == null ? 0 : parseFloat((data || 0).toFixed(2));
         this.#currentTimeSec = sec;
-        if (this.#lastEmitTime < 0 || (sec - this.#lastEmitTime) * 1000 > this.#updateInterval) {
+
+        const isTimeRewind = sec < this.#lastEmitTime;
+        const needEmit = isTimeRewind || (this.#lastEmitTime < 0 || (sec - this.#lastEmitTime) * 1000 > this.#updateInterval);
+
+        if (needEmit) {
             this.#lastEmitTime = sec;
             this.emit(MpvPlayer.EVENTS.CURRENTTIME_UPDATED, this.#currentTimeSec);
         }
@@ -115,7 +144,6 @@ class MpvPlayer extends EventEmitter {
         ], { stdio: ['ignore', 'ignore', 'pipe'] });
 
         this.#player.stderr.on('data', d => console.log('[MPV stderr]', d.toString().trim()));
-
         this.#player.on('exit', (code, signal) => {
             console.log(`[MpvPlayer] Exit: code=${code}, signal=${signal}`);
             this.#cleanup();
@@ -124,7 +152,6 @@ class MpvPlayer extends EventEmitter {
                 this.#reconnectTimer = setTimeout(() => this.#spawn(), 1000);
             }
         });
-
         this.#connectSocket();
     }
 
@@ -135,18 +162,14 @@ class MpvPlayer extends EventEmitter {
                 return;
             }
             this.#socket = net.createConnection(this.#socketPath);
-
             this.#socket.on('connect', () => {
                 this.#isConnected = true;
                 console.log('[MpvPlayer] IPC Connected');
                 this.#setupObservations();
                 this.#flushQueue();
             });
-
             this.#socket.on('data', chunk => this.#handleData(chunk.toString()));
-
             this.#socket.on('error', err => console.warn('[MpvPlayer] Socket error:', err.message));
-
             this.#socket.on('end', () => {
                 console.log('[MpvPlayer] Socket disconnected');
                 this.#isConnected = false;
@@ -174,7 +197,8 @@ class MpvPlayer extends EventEmitter {
 
     #setupObservations() {
         this.#sendCommand(['observe_property', 0, 'time-pos']);
-        this.#sendCommand(['observe_property', 4, 'idle-active']);
+        this.#sendCommand(['observe_property', 1, 'pause']);
+        this.#sendCommand(['observe_property', 2, 'mute']);
     }
 
     #flushQueue() {
@@ -200,24 +224,29 @@ class MpvPlayer extends EventEmitter {
     }
 
     #handleMessage(msg) {
-        if (msg.event === 'playback-restart') return;
+        if (msg.event === 'playback-restart') {
+            this.emit(MpvPlayer.EVENTS.PLAY);
+            return;
+        }
         if (msg.event === 'end-file') {
-            this.emit(MpvPlayer.EVENTS.END);
-            this.#currentFile = null;
+            this.#currentFile ? this.emit(MpvPlayer.EVENTS.END) : this.emit(MpvPlayer.EVENTS.STOP);
             return;
         }
         if (msg.event !== 'property-change') return;
-
         switch (msg.name) {
             case 'time-pos':
                 this.#updateCurrentTime(msg.data);
                 break;
-            case 'idle-active':
-                if (msg.data && this.#currentFile) {
-                    this.emit(MpvPlayer.EVENTS.END);
-                    this.#currentFile = null;
-                }
+            case 'pause': {
+                const paused = !!msg.data;
+                this.emit(MpvPlayer.EVENTS.PAUSE_TOGGLE, paused);
                 break;
+            }
+            case 'mute': {
+                const muted = !!msg.data;
+                this.emit(MpvPlayer.EVENTS.MUTE_TOGGLE, muted);
+                break;
+            }
         }
     }
 

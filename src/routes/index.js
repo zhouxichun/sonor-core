@@ -1,8 +1,10 @@
 const fs = require('fs');
 const path = require('path');
-const Broadcast = require('../services/BroadcastService');
+const BroadcastService = require('../services/BroadcastService');
 
 async function routes(fastify, opts) {
+    const {playService} = opts;
+
     fastify.get('/', async () => {
         return {
             name: 'sonor‑api',
@@ -16,14 +18,42 @@ async function routes(fastify, opts) {
     for (const file of files) {
         if (!file.endsWith('.js')) continue;
         console.log('loading api route:', file);
-        // ❗ 关键：不再 fastify.register()，直接执行路由函数，不生成子实例
         const routeModule = require(path.join(apiDir, file));
-        // 直接调用函数，fastify是当前实例A（prefix=/api），不会新建子实例
         routeModule(fastify, opts);
     }
 
-    fastify.get('/ws', { websocket: true }, (connection) => {
-        // your ws code
+    playService.onStateUpdated((data) => {
+        BroadcastService.broadcast({
+            type: 'player_status',
+            data
+        });
+    });
+
+    playService.onTimeUpdated((data) => {
+        BroadcastService.broadcast({
+            type: 'player_time',
+            data
+        });
+    });
+
+    // WS连接入口： ws://127.0.0.1:3000/api/ws
+    fastify.get('/ws', { websocket: true }, (socket) => {
+        BroadcastService.addClient(socket);
+
+        // 新客户端连上，立刻下发一次播放器状态
+        socket.send(JSON.stringify({
+            type: 'player_status',
+            data: playService.getStatus()
+        }));
+
+        socket.on('close', () => {
+            BroadcastService.removeClient(socket);
+        });
+
+        socket.on('error', (err) => {
+            console.warn('ws client error', err.message);
+            BroadcastService.removeClient(socket);
+        });
     });
 }
 

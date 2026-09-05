@@ -97,17 +97,46 @@ class AudioScanner extends EventEmitter {
     }
 
     async #parseSingleFile(filePath) {
-        const meta = await MusicMetadata.parseFile(filePath, { duration: true });
-        return {
-            uuid: crypto.randomUUID(),
-            filepath: filePath,
-            filename: path.basename(filePath),
-            title: meta.common.title ?? path.basename(filePath, path.extname(filePath)),
-            artist: meta.common.artist ?? '',
-            album: meta.common.album ?? '',
-            duration: meta.format.duration ?? 0,
-            genre: meta.common.genre?.join(',') ?? ''
-        };
+        try {
+            const meta = await MusicMetadata.parseFile(filePath, {
+                duration: true,
+                skipCover: true
+            });
+
+            // 提取内嵌歌词，取第一条
+            let lyric = '';
+            if (meta.common.lyrics && meta.common.lyrics.length > 0) {
+                lyric = meta.common.lyrics[0].text ?? '';
+            }
+
+            return {
+                uuid: crypto.randomUUID(),
+                filepath: filePath,
+                filename: path.basename(filePath),
+                title: meta.common.title,
+                artist: meta.common.artist ?? '',
+                album: meta.common.album ?? '',
+                duration: meta.format?.duration ?? 0,
+                genre: meta.common.genre?.join(',') ?? '',
+                lyric,
+                format: meta.format ?? {}
+            };
+        } catch (err) {
+            console.warn('parse file meta failed:', filePath, err.message);
+            // 解析失败兜底结构
+            return {
+                uuid: crypto.randomUUID(),
+                filepath: filePath,
+                filename: path.basename(filePath),
+                title: null,
+                artist: '',
+                album: '',
+                duration: 0,
+                genre: '',
+                lyric: '',
+                format: {}
+            };
+        }
     }
 }
 
