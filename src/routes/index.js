@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const BroadcastService = require('../services/BroadcastService');
+const logger = require('../utils/logger')(__dirname);
 
 async function routes(fastify, opts) {
     const {playService} = opts;
@@ -17,7 +18,7 @@ async function routes(fastify, opts) {
     const files = fs.readdirSync(apiDir);
     for (const file of files) {
         if (!file.endsWith('.js')) continue;
-        console.log('loading api route:', file);
+        logger.info('loading api route:', file);
         const routeModule = require(path.join(apiDir, file));
         routeModule(fastify, opts);
     }
