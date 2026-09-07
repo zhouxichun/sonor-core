@@ -146,3 +146,6 @@ vscode/
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+#local service file
+src/sonor-core.service
