@@ -59,6 +59,26 @@ async function libRoute(fastify, opts) {
     return {result: cover};
   });
 
+  fastify.get('/lib/folders', async () => {
+    const folders = await audioLibraryService.getFolders();
+    return {result: folders};
+  });
+
+  fastify.post('/lib/folder/scan', {
+    schema: {
+      body: {
+        type: 'object',
+        required: ['folder'],
+        properties: {
+          folder: { type: 'string' }
+        }
+      }
+    }
+  }, async (req) => {
+    const { folder } = req.body;
+    const result = await audioLibraryService.scanFolder(folder);
+    return { result };
+  });
 }
 
 module.exports = libRoute;

@@ -1,4 +1,4 @@
-const fastify = require('fastify')({ logger: true });
+const fastify = require('fastify')({ logger: {level: 'info'}, disableRequestLogging: true });
 const AudioLibraryService = require('./services/AudioLibraryService');
 const PlayService = require('./services/PlayService');
 const fsSync = require('fs');

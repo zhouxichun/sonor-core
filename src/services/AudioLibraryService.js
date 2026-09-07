@@ -269,6 +269,7 @@ class AudioLibraryService extends SonorService {
         }
         return Array.from(map.entries()).map(([name, count]) => ({ name, count }));
     }
+    
     async destroy() {
         await super.destroy();
         for (const scanner of this.#scannerInstances.values()) {

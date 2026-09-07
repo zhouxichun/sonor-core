@@ -7,7 +7,7 @@ async function routes(fastify, opts) {
 
     fastify.get('/', async () => {
         return {
-            name: 'sonor‑api',
+            name: 'sonor-api',
             ready: true,
             timestamp: Date.now()
         };
@@ -36,7 +36,6 @@ async function routes(fastify, opts) {
         });
     });
 
-    // WS连接入口： ws://127.0.0.1:3000/api/ws
     fastify.get('/ws', { websocket: true }, (socket) => {
         BroadcastService.addClient(socket);
 
