@@ -4,6 +4,8 @@ const path = require('path');
 const AudioScanner = require('./AudioScanner');
 const UsbDriver = require('./UsbDriver');
 const SonorService = require('./SonorService');
+const musicMetadata = require('music-metadata');
+const sharp = require('sharp');
 
 class AudioLibraryService extends SonorService {
     #audios;
@@ -11,6 +13,10 @@ class AudioLibraryService extends SonorService {
     #autoScan;
     #datafilePath;
     #usbDriver;
+
+    // 内存缓存：albumKey → 本地图片绝对路径
+    #albumCoverCache = new Map();
+    #coverCacheDir;
 
     /**
      * @param {Object} opts
@@ -23,9 +29,13 @@ class AudioLibraryService extends SonorService {
         this.#scannerInstances = new Map();
        
         this.#datafilePath = path.join(this.dataPath, 'audio_library.json');
+        this.#coverCacheDir = path.join(this.dataPath, 'cover_cache');
+        if (!fsSync.existsSync(this.#coverCacheDir)) {
+            fsSync.mkdirSync(this.#coverCacheDir, { recursive: true });
+        }
+
         this.#autoScan = opts.autoScanUsb ?? true;
         this.#usbDriver = new UsbDriver();
-
         this.#usbDriver.onUsbFound(async (devices) => {
             console.info(`USB devices found: ${devices.length} devices`);
             for (const device of devices) {
@@ -241,21 +251,24 @@ class AudioLibraryService extends SonorService {
 
     /**
      * 获取不重复流派列表，附带曲目计数
+     * 注意：genre 字段为逗号分隔的多值，需拆分后分别计数
      * @returns Array<{name:string, count:number}>
      */
     getDistinctGenres() {
         const tracks = this.#flattenTrackList();
         const map = new Map();
         for (const t of tracks) {
-            const raw = (t.genre || '未知流派').trim();
-            const parts = raw.split(',').map(g => g.trim()).filter(Boolean);
-            for (const g of parts) {
+            // 拆分成多个流派，兼容中英文逗号
+            const raw = t.genre || '';
+            const genres = raw.split(/[,，]/).map(s => s.trim()).filter(Boolean);
+            // 一个流派都没有才兜底为"未知流派"
+            const list = genres.length > 0 ? genres : ['未知流派'];
+            for (const g of list) {
                 map.set(g, (map.get(g) || 0) + 1);
             }
         }
         return Array.from(map.entries()).map(([name, count]) => ({ name, count }));
     }
-
     async destroy() {
         await super.destroy();
         for (const scanner of this.#scannerInstances.values()) {
@@ -263,6 +276,112 @@ class AudioLibraryService extends SonorService {
         }
         this.#scannerInstances.clear();
         await this.#usbDriver.destroy();
+    }
+
+    /**
+     * 根据专辑key生成缓存文件名md5
+     * @param {string} albumKey
+     * @returns {string}
+     */
+    #getCoverFilename(albumKey) {
+        const crypto = require('crypto');
+        return crypto.createHash('md5').update(albumKey).digest('hex');
+    }
+
+    /**
+     * 查找磁盘上的原图缓存
+     * @param {string} albumKey
+     * @returns {Promise<string|null>} 图片完整路径，null无缓存
+     */
+    async #findCoverFileInDisk(albumKey) {
+        const baseName = this.#getCoverFilename(albumKey);
+        const fullPath = path.join(this.#coverCacheDir, `${baseName}.jpg`);
+        if(fsSync.existsSync(fullPath)){
+            return fullPath;
+        }
+        return null;
+    }
+
+    /**
+     * 将原图buffer写入磁盘缓存
+     * @param {string} albumKey
+     * @param {Buffer} imageBuf
+     * @returns {string} 写入完整路径
+     */
+    async #writeCoverFileToDisk(albumKey, imageBuf) {
+        const baseName = this.#getCoverFilename(albumKey);
+        const fullPath = path.join(this.#coverCacheDir, `${baseName}.jpg`);
+        await fs.writeFile(fullPath, imageBuf);
+        return fullPath;
+    }
+
+    /**
+     * 读取音频内嵌封面，输出原图buffer(jpg)，不缩放
+     * @param {string} filepath
+     * @returns {Promise<{buffer:Buffer}|null>}
+     */
+    async #readCoverBuffer(filepath) {
+        try {
+            const meta = await musicMetadata.parseFile(filepath, {
+                skipCovers: false,
+                skipPostProcess: true
+            });
+            const pictureList = meta.common?.picture;
+            if (!pictureList || pictureList.length === 0) {
+                return null;
+            }
+            const pic = pictureList[0];
+            // 统一转jpg原图存入磁盘
+            const buffer = await sharp(pic.data).jpeg({quality:90}).toBuffer();
+            return { buffer: buffer };
+        } catch (err) {
+            console.warn('读取音频封面失败', filepath, err.message);
+            return null;
+        }
+    }
+
+    /**
+     * 根据uuid获取曲目封面
+     * @param {string} uuid
+     * @param {{thumbnailWidth?:number}} opts
+     * @returns {Promise<string|null>} dataUrl base64
+     */
+    async getCoverByUuid(uuid, opts = {}) {
+        let foundTrack = null;
+        for(const folderItem of this.#audios) {
+            foundTrack = folderItem.traces?.find(t => t.uuid === uuid);
+            if(foundTrack) break;
+        }
+        if (!foundTrack || !foundTrack.filepath) {
+            return null;
+        }
+
+        const { thumbnailWidth } = opts;
+        // albumKey 仅 artist||album，不携带尺寸
+        const albumKey = `${foundTrack.artist || ''}||${foundTrack.album || ''}`;
+
+        let imagePath = await this.#findCoverFileInDisk(albumKey);
+        // 磁盘没有原图，解析音频写入磁盘
+        if (!imagePath) {
+            const raw = await this.#readCoverBuffer(foundTrack.filepath);
+            if (!raw) {
+                return null;
+            }
+            imagePath = await this.#writeCoverFileToDisk(albumKey, raw.buffer);
+        }
+
+        // 读取磁盘原图buffer
+        let image = sharp(imagePath);
+        // 如果请求指定缩略尺寸，内存实时缩放
+        if (thumbnailWidth && Number.isInteger(thumbnailWidth)) {
+            image = image.resize({
+                width: thumbnailWidth,
+                height: thumbnailWidth,
+                fit: 'inside'
+            });
+        }
+        const outBuf = await image.jpeg({quality:85}).toBuffer();
+        return `data:image/jpeg;base64,${outBuf.toString('base64')}`;
     }
 }
 

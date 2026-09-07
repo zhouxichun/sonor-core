@@ -6,180 +6,221 @@
     <title>Sonor</title>
     <script src="https://cdn.jsdelivr.net/npm/angular@1.8.3/angular.min.js"></script>
     <link rel="stylesheet" href="./style.css">
+    <link rel="stylesheet" href="/assets/font-awesome/css/font-awesome.min.css">
 </head>
 <body ng-app="sonorApp" ng-controller="MainCtrl">
 <!-- 全局toast提示 -->
 <div class="toast-notice" ng-if="toastMessage">{{toastMessage}}</div>
-<div class="panel">
-    <!-- 视图1：播放详情 -->
-    <div ng-if="viewMode === 'player'" class="player-view-container">
-        <!-- 右上角悬浮图标按钮组 -->
-        <div class="top-float-buttons">
-            <button class="float-btn" ng-click="switchView('playlist')" title="播放列表">🎶</button>
-            <button class="float-btn" ng-click="switchView('library')" title="音乐库">📚</button>
-            <button class="float-btn" ng-click="toggleRandom()" ng-class="{'active':randomMode}">🔀</button>
-
+<div class="panel panel-root-flex">
+    <!-- 标题栏 -->
+    <div class="top-float-buttons">
+        <div class="header-left">
+            <h2 class="app-title">Sonor</h2>
         </div>
-        <div class="player-detail-lyric">
-            <!-- 固定头部meta区域 -->
-            <div class="lyric-meta">
-                <div class="lyric-meta-title">{{currentTrack.title}}</div>
-                <div class="lyric-meta-artist">{{currentTrack.artist}} · {{currentTrack.album}}</div>
-                <div class="lyric-meta-extra">
-                    <span ng-if="currentTrack.genre">流派:{{currentTrack.genre}}</span>
-                    <span ng-if="currentTrack.format">
-                        {{currentTrack.format.codec}} | {{currentTrack.format.bitrate/1000}}kbps |
-                        {{currentTrack.format.sampleRate/1000}}kHz | {{currentTrack.format.lossless?'无损':'有损'}}
-                    </span>
-                </div>
-            </div>
-            <!-- 只有歌词区域滚动 -->
-            <div class="lyric-scroll-wrap">
-                <div class="lyric-wrap" ng-if="parsedLyric.length>0">
-                    <div class="lyric-line"
-                        ng-repeat="line in parsedLyric"
-                        ng-class="{'lyric-active': line.isActive}">
-                        {{line.text}}
+        <div class="header-right">
+        <button class="float-btn" ng-click="switchView('player')" title="播放器">
+            <i class="fa fa-music"></i>
+        </button>
+        <button class="float-btn" ng-click="switchView('playlist')" title="播放列表">
+            <i class="fa fa-list"></i>
+        </button>
+        <button class="float-btn" ng-click="switchView('library')" title="音乐库">
+            <i class="fa fa-book"></i>
+        </button>
+    </div>
+    </div>
+    <!-- 核心：view-container 占剩余全部空间，内部允许滚动 -->
+    <div class="view-container view-container--flex-scroll">
+        <!-- 视图1：播放详情 -->
+        <div ng-if="viewMode === 'player'" class="player-view-container">
+            <div class="player-detail">
+                <!-- 固定头部meta区域 -->
+                <div class="lyric-meta">
+                    <div class="lyric-meta-title">{{currentTrack.title}}</div>
+                    <div class="lyric-meta-artist">{{currentTrack.artist}} · {{currentTrack.album}}</div>
+                    <div class="lyric-meta-extra">
+                        <span ng-if="currentTrack.genre">流派:{{currentTrack.genre}}</span>
+                        <span ng-if="currentTrack.format">
+                            {{currentTrack.format.codec}} | {{currentTrack.format.bitrate/1000}}kbps |
+                            {{currentTrack.format.sampleRate/1000}}kHz | {{currentTrack.format.lossless?'无损':'有损'}}
+                        </span>
                     </div>
                 </div>
-                <div class="lyric-placeholder" ng-if="!parsedLyric || parsedLyric.length===0">暂无歌词</div>
-            </div>
-        </div>
-
-    </div>
-
-    <!-- 视图2：音乐库 -->
-    <div ng-if="viewMode === 'library'">
-        <input type="text" placeholder="搜索标题/歌手/专辑"
-               ng-model="libFilter.keyword"
-               ng-keyup="$event.keyCode === 13 && doSearch()">
-        <div class="group-tabs">
-            <button ng-class="{active:activeGroup==='artist'}" ng-click="switchGroup('artist')">歌手</button>
-            <button ng-class="{active:activeGroup==='album'}" ng-click="switchGroup('album')">专辑</button>
-            <button ng-class="{active:activeGroup==='genre'}" ng-click="switchGroup('genre')">流派</button>
-        </div>
-        <!-- 视图A：搜索结果 -->
-        <div ng-if="libFilter.keyword">
-            <h4>搜索：{{libFilter.keyword}}</h4>
-            <div style="display:flex;gap:8px;margin-bottom:10px;justify-content:flex-end;">
-                <button class="gray" ng-click="playAllCurrentTracks()">全部播放</button>
-                <button class="gray" ng-click="clearSearch()">清除搜索</button>
-            </div>
-            <div ng-repeat="track in libTracks" class="track-item">
-                <div class="track-row1">
-                    <span class="track-title">{{track.title}}</span>
-                    <button class="btn-icon-add gray" ng-click="addTrackToPlaylist(track)" title="添加到播放列表">+</button>
-                </div>
-                <div class="track-row2">
-                    <span>{{track.album||'未知专辑'}}</span>
-                    <span>{{track.artist||'未知歌手'}}</span>
-                    <span>{{track.genre||'无流派'}}</span>
-                    <span>{{ getLosslessLabel(track) }}</span>
+                <!-- 占父剩下全部空间，手机会自动变高，内容溢出滚动 -->
+                <div class="lyric-scroll-wrap">
+                    <div class="lyric-wrap" ng-if="parsedLyric.length>0">
+                        <div class="lyric-line"
+                            ng-repeat="line in parsedLyric"
+                            ng-class="{'lyric-active': line.isActive}">
+                            {{line.text}}
+                        </div>
+                    </div>
+                    <div class="lyric-placeholder" ng-if="!parsedLyric || parsedLyric.length===0">暂无歌词</div>
                 </div>
             </div>
         </div>
-        <!-- 视图B：分组名称列表 -->
-        <div ng-if="!libFilter.keyword && !selectedGroupName">
-            <div ng-repeat="item in groupList" class="list-row" ng-click="openGroupItem(item)">
-                <span>{{item.name}}</span>
-                <span class="count-tag">({{item.count}})</span>
-            </div>
-        </div>
-        <!-- 视图C：分组下歌曲 -->
-        <div ng-if="!libFilter.keyword && selectedGroupName">
-            <div style="display:flex;gap:8px;margin-bottom:10px;justify-content:flex-end;">
-                <button class="gray" ng-click="playAllCurrentTracks()">全部播放</button>
-            </div>
-            <h4>{{activeGroup}}：{{selectedGroupName}}</h4>
-            <div ng-repeat="track in libTracks" class="track-item">
-                <div class="track-row1">
-                    <span class="track-title">{{track.title}}</span>
-                    <button class="btn-icon-add gray" ng-click="addTrackToPlaylist(track)" title="添加到播放列表">+</button>
-                </div>
-                <div class="track-row2">
-                    <span>{{track.album||'未知专辑'}}</span>
-                    <span>{{track.artist||'未知歌手'}}</span>
-                    <span>{{track.genre||'无流派'}}</span>
-                    <span>{{ getLosslessLabel(track) }}</span>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- 视图3：播放列表 -->
-    <div ng-if="viewMode === 'playlist'">
-        <div style="display:flex;gap:8px;margin-bottom:10px;justify-content:flex-end;">
-            <button class="gray" ng-click="loadPlaylist()">刷新</button>
-            <button class="gray" ng-click="clearPlaylist()">清空列表</button>
-        </div>
-        <h4>当前播放列表 ({{playlistTracks.length}})</h4>
-        <div ng-if="playlistTracks.length === 0" style="padding:20px 0;color:#aaa;">播放列表为空</div>
-        <div ng-repeat="track in playlistTracks" class="track-item">
-            <div class="track-row1">
-                <span class="track-title">{{track.title}}</span>
-                <!-- 三点下拉菜单 -->
-                <div class="dropdown-wrap" style="position:relative;display:inline-block;">
-                    <button class="btn-icon-add gray" ng-click="toggleDropdown(track.uuid)" type="button">⋯</button>
-                    <div class="dropdown-menu" ng-if="openDropdownUuid === track.uuid" style="position:absolute;right:0;top:100%;z-index:99;background:#222;border:1px solid #444;border-radius:4px;min-width:90px;">
-                        <div class="dropdown-item" ng-click="playTrack(track.uuid);" style="padding:6px 10px;cursor:pointer;">播放</div>
-                        <div class="dropdown-item" ng-click="removeFromPlaylist(track.uuid);" style="padding:6px 10px;cursor:pointer;">移除</div>
+        <!-- 视图2：音乐库 -->
+        <div ng-if="viewMode === 'library'" class="library-view-root">
+            <!-- 固定头部，不随列表滚动 -->
+            <div class="library-header-bar">
+                <input type="text" placeholder="搜索标题/歌手/专辑"
+                    ng-model="libFilter.keyword"
+                    ng-keyup="$event.keyCode === 13 && doSearch()">
+                <div class="group-tabs">
+                    <div>
+                        <button ng-class="{active:activeGroup==='artist'}" ng-click="switchGroup('artist')">歌手</button>
+                        <button ng-class="{active:activeGroup==='album'}" ng-click="switchGroup('album')">专辑</button>
+                        <button ng-class="{active:activeGroup==='genre'}" ng-click="switchGroup('genre')">流派</button>
+                    </div>
+                    <div>
+                        <h4 ng-if="libFilter.keyword">过滤: 关键词={{libFilter.keyword}}</h4>
+                        <h4 ng-if="!libFilter.keyword && selectedGroupName">过滤: {{activeGroup}}={{selectedGroupName}}</h4>
                     </div>
                 </div>
             </div>
-            <div class="track-row2">
-                <span>{{track.album||'未知专辑'}}</span>
-                <span>{{track.artist||'未知歌手'}}</span>
-                <span>{{track.genre||'无流派'}}</span>
-                <span>{{ getLosslessLabel(track) }}</span>
+
+            <!-- 可滚动内容区域 -->
+            <div class="library-content-wrap">
+                <!-- 视图B：分组名称列表 -->
+                <div ng-if="!libFilter.keyword && !selectedGroupName">
+                    <div class="group-card-wrap">
+                        <div class="group-card" ng-repeat="item in groupList" ng-click="openGroupItem(item)">
+                            <div class="group-card-name">{{item.name}}</div>
+                            <div class="group-card-count">{{item.count}}首</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 【合并：搜索结果 / 分组歌曲，共用下面列表】 -->
+                <div ng-if="libFilter.keyword || selectedGroupName">
+                    <!-- 只写一次歌曲列表，不再复制两份 -->
+                    <div ng-repeat="track in libTracks" class="track-item">
+                        <div class="track-row1">
+                            <span class="track-title">{{track.title}}</span>
+                            <div class="dropdown-wrap">
+                                <button class="btn-icon-add gray" ng-click="toggleDropdown(track.uuid)" title="更多">⋯</button>
+                                <div class="dropdown-menu" ng-if="openDropdownUuid === track.uuid">
+                                    <div class="dropdown-item" ng-click="addTrackToPlaylist(track.uuid)">添加</div>
+                                    <div class="dropdown-item" ng-click="addAllToPlaylist()">添加全部</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="track-row2">
+                            <span>{{track.album||'未知专辑'}}</span>
+                            <span>{{track.artist||'未知歌手'}}</span>
+                            <span>{{track.genre||'无流派'}}</span>
+                            <span>{{ getLosslessLabel(track) }}</span>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+        <!-- 视图3：播放列表 -->
+        <div ng-if="viewMode === 'playlist'" class="playlist-view-root">
+            <!-- 固定头部，不随列表滚动 -->
+            <div class="playlist-header-bar">
+                <h4>当前播放列表 ({{playlistTracks.length}})</h4>
+                <div class="btn-bar-end">
+                    <button class="float-btn small-icon-btn" ng-click="loadPlaylist()" title="刷新">
+                        <i class="fa fa-refresh"></i>
+                    </button>
+                    <button class="float-btn small-icon-btn" ng-click="clearPlaylist()" title="清空列表">
+                        <i class="fa fa-trash"></i>
+                    </button>
+                </div>
+            </div>
+            <!-- 可滚动列表区域 -->
+            <div class="playlist-track-wrap">
+                <div ng-if="playlistTracks.length === 0" class="playlist-empty-tip">播放列表为空</div>
+                <div ng-repeat="track in playlistTracks"
+                    class="track-item"
+                    ng-class="{'track-item-active': $index === currentIndex}"
+                    id="playlist-item-{{$index}}">
+                    <div class="track-row1">
+                        <span class="track-title">{{track.title}}</span>
+                        <!-- 三点下拉菜单 -->
+                        <div class="dropdown-wrap">
+                            <button class="btn-icon-add gray" ng-click="toggleDropdown(track.uuid)" type="button">⋯</button>
+                            <div class="dropdown-menu" ng-if="openDropdownUuid === track.uuid">
+                                <div class="dropdown-item" ng-click="playTrack(track.uuid);">播放</div>
+                                <div class="dropdown-item" ng-click="removeFromPlaylist(track.uuid);">移除</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="track-row2">
+                        <span>{{track.album||'未知专辑'}}</span>
+                        <span>{{track.artist||'未知歌手'}}</span>
+                        <span>{{track.genre||'无流派'}}</span>
+                        <span>{{ getLosslessLabel(track) }}</span>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
-
-
-    <!-- 给底部播放器留出高度 -->
-    <div style="height:120px;"></div>
+   <div class="player-bar-spacer">播放器占位</div>
 </div>
-
-<div class="player-bar">
-    <!-- 左侧封面缩略图 -->
-    <div class="player-bar-cover-wrap">
-        <img 
-            class="player-bar-cover" 
-            ng-src="{{currentTrack.cover || '/album_small.jpg'}}"        
-            ng-click="openPlayerDetail()"
-            alt="cover">
-    </div>
-
-    <div class="player-bar-main">
-        <div class="player-info">
-            <div class="player-title">{{currentTrack.title || '未播放'}}</div>
-            <div class="player-artist">{{currentTrack.artist || '--'}}</div>
-        </div>
-        <div class="player-progress-wrap">
-            <div class="player-progress-bar" ng-click="seekBarClick($event)">
-                <div class="player-progress-fill" style="width:{{progressPercent}}%"></div>
+<!-- 底部播放器栏，固定高度 -->
+    <div class="player-bar">
+        <div class="player-bar-info">
+            <div class="player-bar-cover-wrap">
+                <img
+                    class="player-bar-cover"
+                    ng-src="{{ currentTrackLoadedCover || '/album_small.jpg' }}"
+                    ng-click="openCoverPopup($event)"
+                    alt="cover">
             </div>
-            <div class="player-time">{{formatSec(currentTime)}} / {{formatSec(totalTime)}}</div>
+            <div class="player-bar-main">
+                <div class="player-info">
+                    <div class="player-title">{{currentTrack.title || '未播放'}}</div>
+                    <div class="player-artist">{{currentTrack.artist || '--'}}</div>
+                </div>
+                <div class="player-progress-wrap">
+                    <div class="player-progress-bar" ng-click="seekBarClick($event)">
+                        <div class="player-progress-fill" ng-style="{width: (progressPercent)+'%'}"></div>
+                    </div>
+                    <div class="player-time">{{formatSec(currentTime)}} / {{formatSec(totalTime)}}</div>
+                </div>
+            </div>
         </div>
         <div class="player-controls">
-            <!-- 左侧播放按钮组 -->
             <div>
-                <button class="player-btn" ng-click="playPrev()">⏮</button>
-                <button class="player-btn" ng-click="playPause()">{{isPlaying ? '⏸' : '▶'}}</button>
-                <button class="player-btn" ng-click="playerStop()">⏹</button>
-                <button class="player-btn" ng-click="playNext()">⏭</button>
-                <button class="player-btn" ng-click="toggleLoop()" ng-class="{'active':loopMode}">🔁</button>
+                <button class="player-btn" ng-click="playPrev()"><i class="fa fa-step-backward"></i></button>
+                <button class="player-btn" ng-click="playPause()">
+                    <i ng-if="!isPlaying || isPaused" class="fa fa-play"></i>
+                    <i ng-if="isPlaying && !isPaused" class="fa fa-pause"></i>
+                </button>
+                <button class="player-btn" ng-click="playerStop()" ng-disabled="!isPlaying"><i class="fa fa-stop"></i></button>
+                <button class="player-btn" ng-click="playNext()"><i class="fa fa-step-forward"></i></button>
+                <button class="player-btn" ng-click="toggleLoop()" ng-class="{'active':loopMode}"><i class="fa fa-repeat"></i></button>
+                <button class="player-btn" ng-click="toggleRandom()" ng-class="{'active':randomMode}" title="随机播放">
+                    <i class="fa fa-random"></i>
+                </button>
             </div>
-            <!-- 右侧音量 -->
+
             <div class="volume-slider-wrap">
-                <div class="vol-track-bg"></div>
-                <div class="vol-track-fill" ng-style="{width: (volume)+'%'}"></div>
-                <input type="range" min="0" max="100" ng-model="volume" ng-change="setVolume(volume)">
+                <button ng-click="toggleMute()" ng-class="{'active':isMuted}" title="静音">
+                    <i ng-if="!isMuted && volume>50" class="fa fa-volume-up"></i>
+                    <i ng-if="!isMuted && volume<=50 && volume>0" class="fa fa-volume-down"></i>
+                    <i ng-if="isMuted || volume===0" class="fa fa-volume-off"></i>
+                </button>
+                <!-- 滑块全部放进这个容器 -->
+                <div class="vol-slider-inner">
+                    <div class="vol-track-bg"></div>
+                    <div class="vol-track-fill" ng-style="{width: (volume)+'%'}"></div>
+                    <input type="range" min="0" max="100" ng-model="volume" ng-change="setVolume()">
+                </div>
             </div>
         </div>
     </div>
+<!-- 封面大图弹窗 -->
+<div class="cover-popup-mask" ng-if="showCoverPopup" ng-click="closeCoverPopup()">
+    <div class="cover-popup-inner" ng-click="$event.stopPropagation()">
+        <img class="cover-popup-img" ng-src="{{currentTrackLoadedCover || '/album.jpg'}}" alt="full cover">
+    </div>
 </div>
-
+<!-- 下拉菜单遮罩 -->
+<div class="dropdown-backdrop" ng-if="openDropdownUuid !== null" ng-click="closeDropdown()"></div>
 <script src="./app.js"></script>
 </body>
 </html>

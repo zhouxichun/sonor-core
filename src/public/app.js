@@ -15,6 +15,7 @@ app.controller('MainCtrl',['$scope','$http','$timeout',function($scope,$http,$ti
     $scope.totalTime = 0;
     $scope.progressPercent = 0;
     $scope.isPlaying = false;
+    $scope.isPaused = true;
     $scope.volume = 50;
     $scope.loopMode = false;
     $scope.randomMode = false;
@@ -46,6 +47,37 @@ app.controller('MainCtrl',['$scope','$http','$timeout',function($scope,$http,$ti
         const sec = Math.floor(s%60);
         return String(m).padStart(2,'0')+':'+String(sec).padStart(2,'0');
     };
+    // 下拉菜单关闭
+    $scope.closeDropdown = function(){
+        $scope.openDropdownUuid = null;
+    };
+    /**
+     * 将当前播放条目滚动到视口
+     */
+    $scope.scrollToCurrentPlaying = function () {
+        if ($scope.currentIndex === undefined || $scope.currentIndex < 0) {
+            return;
+        }
+        const domId = `playlist-item-${$scope.currentIndex}`;
+        const el = document.getElementById(domId);
+        if (!el) return;
+        // scrollIntoView，尽量居中显示
+        el.scrollIntoView({
+            behavior: 'smooth',
+            block: 'center'
+        });
+    };
+
+    // viewMode变更监听
+    $scope.$watch('viewMode', function(newVal){
+        if(newVal === 'playlist'){
+            // 等待一轮digest，dom渲染完毕再滚动
+            $timeout(function(){
+                $scope.scrollToCurrentPlaying();
+            },50);
+        }
+    });
+
 
     // ====================== 播放列表下拉菜单 ======================
     $scope.openDropdownUuid = null;
@@ -68,6 +100,7 @@ app.controller('MainCtrl',['$scope','$http','$timeout',function($scope,$http,$ti
                     const d = msg.data;
                     $scope.$apply(()=>{
                         $scope.isPlaying = d.playing;
+                        $scope.isPaused = d.paused;
                         $scope.volume = d.volume;
                         $scope.loopMode = d.loop;
                         $scope.randomMode = d.random;
@@ -83,6 +116,12 @@ app.controller('MainCtrl',['$scope','$http','$timeout',function($scope,$http,$ti
 
                         if($scope.currentTrack && $scope.currentTrack.lyric){
                             $scope.parsedLyric = parseLrc($scope.currentTrack.lyric);
+                            $scope.loadTrackThumbCover($scope.currentTrack.uuid).then(cover => {
+                                $scope.$apply(()=>{
+                                    $scope.currentTrackLoadedCover = cover;
+                                });
+                            });
+                            $scope.scrollToCurrentPlaying();
                         }else{
                             $scope.parsedLyric = [];
                         }
@@ -114,19 +153,30 @@ app.controller('MainCtrl',['$scope','$http','$timeout',function($scope,$http,$ti
                         });
 
                         // 滚动到激活行
-                        if(activeIndex >=0){
-                            $timeout(()=>{
-                                const domLines = document.querySelectorAll('.lyric-line');
+                        if (activeIndex >= 0) {
+                            $timeout(() => {
+                                const wrap = document.querySelector('.lyric-scroll-wrap');
+                                const domLines = wrap?.querySelectorAll('.lyric-line');
+                                if (!wrap || !domLines || !domLines[activeIndex]) return;
+
                                 const activeDom = domLines[activeIndex];
-                                if(activeDom){
-                                    const wrap = document.querySelector('.player-detail-lyric');
-                                    if(wrap){
-                                        // 把当前行滚动到容器中间
-                                        activeDom.scrollIntoView({behavior:'smooth', block:'center'});
-                                    }
-                                }
-                            },0);
+                                const wrapRect = wrap.getBoundingClientRect();
+                                const lineRect = activeDom.getBoundingClientRect();
+
+                                // 计算行相对于滚动容器内部的top
+                                const relativeTop = lineRect.top - wrapRect.top + wrap.scrollTop;
+                                const halfWrap = wrap.clientHeight / 2;
+
+                                const targetScrollTop = relativeTop - halfWrap + (activeDom.offsetHeight / 2);
+
+                                wrap.scrollTo({
+                                    top: targetScrollTop,
+                                    behavior: 'smooth'
+                                });
+                            }, 80);
                         }
+
+
                     });
                     break;
                 }
@@ -172,6 +222,10 @@ app.controller('MainCtrl',['$scope','$http','$timeout',function($scope,$http,$ti
     $scope.toggleRandom = async function(){
         try{ await $http.post(`${apiBase}/player/random`); }catch(e){ $scope.showToast('操作失败'); }
     };
+    // 静音切换
+    $scope.toggleMute = async function(){
+        try{ await $http.post(`${apiBase}/player/mute`); }catch(e){ $scope.showToast('操作失败'); }
+    };
     // 设置音量
     $scope.setVolume = async function(){
         try{ await $http.post(`${apiBase}/player/volume`, {volume: $scope.volume}); }catch(e){ $scope.showToast('设置音量失败'); }
@@ -201,9 +255,7 @@ app.controller('MainCtrl',['$scope','$http','$timeout',function($scope,$http,$ti
         try {
             await $http.post(`${apiBase}/player/list/remove`, [uuid]);
             $scope.showToast("已从播放列表移除");
-            // 直接本地数组删除，不请求接口
-            const idx = $scope.playlistTracks.findIndex(item => item.uuid === uuid);
-            if(idx !== -1) $scope.playlistTracks.splice(idx, 1);
+            await $scope.loadPlaylist();
         } catch(e) {
             $scope.showToast("移除失败");
         }
@@ -237,13 +289,9 @@ app.controller('MainCtrl',['$scope','$http','$timeout',function($scope,$http,$ti
         $scope.libFilter.keyword = '';
         $scope.activeGroup = group;
         $scope.selectedGroupName = null;
-        let url;
-        switch(group){
-            case 'artist': url = `${apiBase}/lib/artists`; break;
-            case 'album': url = `${apiBase}/lib/albums`; break;
-            case 'genre': url = `${apiBase}/lib/genres`; break;
-        }
+        let url = `${apiBase}/lib/grouptotal/${group}`;
         const res = await $http.get(url);
+        console.log('group list:', res.data);
         $scope.$apply(()=>{ $scope.groupList = res.data.data.result; });
     };
 
@@ -266,19 +314,29 @@ app.controller('MainCtrl',['$scope','$http','$timeout',function($scope,$http,$ti
         $scope.switchGroup($scope.activeGroup);
     };
 
-    $scope.playAllCurrentTracks = async function(){
+    $scope.addAllToPlaylist = async function(){
+        $scope.openDropdownUuid = null;
         try{
             const uuidList = $scope.libTracks.map(t => t.uuid);
             if(uuidList.length === 0) return;
             await $http.post(`${apiBase}/player/list`, uuidList);
+            await $scope.loadPlaylist(); // 直接调用已有加载方法刷新
             $scope.showToast('已全部加入播放列表');
         }catch(e){ $scope.showToast('操作失败'); }
     };
 
-    $scope.addTrackToPlaylist = async function(track){
-        try{ await $http.post(`${apiBase}/player/list`, [track.uuid]); $scope.showToast('已添加到播放列表'); }
-        catch(e){ $scope.showToast('添加失败'); }
+    $scope.addTrackToPlaylist = async function(uuid){
+        $scope.openDropdownUuid = null;
+        try{
+            await $http.post(`${apiBase}/player/list`, [uuid]);
+            await $scope.loadPlaylist(); // 复用
+            $scope.showToast('已添加到播放列表');
+        }catch(e){
+            $scope.showToast('添加失败');
+        }
     };
+
+
 
     /**
      * 解析lrc歌词字符串
@@ -308,6 +366,39 @@ app.controller('MainCtrl',['$scope','$http','$timeout',function($scope,$http,$ti
         return result;
     }
 
+    // 封面内存缓存
+    $scope.coverCache = {};
+
+    /**
+     * 加载封面
+     * @param {string} uuid
+     */
+    $scope.loadTrackThumbCover = async function(uuid) {
+        if (!$scope.coverCache[uuid]) {
+            try {
+                const res = await $http.get(`/api/lib/track/${uuid}/cover`, {
+                    params: { thumbnailWidth: 640 }
+                });
+                $scope.coverCache[uuid] = res.data.data.result;
+            } catch (e) {
+                $scope.coverCache[uuid] = null;
+            }
+        }
+        return $scope.coverCache[uuid];
+    };
+
+    // 封面弹窗
+    $scope.showCoverPopup = false;
+
+    $scope.openCoverPopup = function($event) {
+        $event.stopPropagation();
+        if(!$scope.currentTrackLoadedCover) return;
+        $scope.showCoverPopup = true;
+    };
+
+    $scope.closeCoverPopup = function() {
+        $scope.showCoverPopup = false;
+    };
 
     // ====================== 页面初始化 ======================
     $scope.loadPlaylist();

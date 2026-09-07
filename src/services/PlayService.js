@@ -3,11 +3,15 @@ const fs = require('fs').promises;
 const fsSync = require('fs');
 const MpvPlayer = require('./MpvPlayer');
 const path = require('path');
+const musicMetadata = require('music-metadata');
+const sharp = require('sharp');
+
 class PlayService extends SonorService {
     static EVENTS = {
         STATUS: 'playService:status',
         CURRENTTIME_UPDATED: 'mpvplayer:currenttime_updated'
     };
+    #destroyed;
     #mpvPlayer;
     /** 持久化数据：落地playstate.json */
     #persistData = {
@@ -29,6 +33,7 @@ class PlayService extends SonorService {
      */
     constructor(opts = {}) {
         super(opts);
+        this.#destroyed = false;
         this.#dataFile = path.join(this.dataPath, 'playstate.json');
         this.#mpvPlayer = new MpvPlayer({ updateInterval: 1000 });
         this.#mpvPlayer.onPlay(() => {
@@ -136,7 +141,7 @@ class PlayService extends SonorService {
         return next;
     }
 
-    /**
+     /**
      * 追加一批曲目到当前播放列表（会持久化）
      * @param {Array} trackList
      */
@@ -144,9 +149,21 @@ class PlayService extends SonorService {
         if (!Array.isArray(trackList)) {
             throw new Error('trackList must be array');
         }
-        this.#persistData.playlist.push(...trackList);
-        await this.#saveState();
-        this.#emitStatus();
+
+        // 获取已存在的uuid集合，用于快速查重
+        const existUuids = new Set(
+            this.#persistData.playlist.map(item => item.uuid)
+        );
+
+        // 过滤：只加入uuid不在现有列表的曲目
+        const newItems = trackList.filter(track => {
+            return track && track.uuid && !existUuids.has(track.uuid);
+        });
+
+        if(newItems.length > 0) {
+            this.#persistData.playlist.push(...newItems);
+            await this.#saveState();
+        }
     }
 
     async clearPlaylist() {
@@ -351,14 +368,64 @@ class PlayService extends SonorService {
         return this.on(PlayService.EVENTS.STATUS, callback);
     }
 
+
+    /**
+     * 内部读取音频内嵌封面
+     * @param {string} filepath
+     * @param {number|null} resizeWidth 需要缩略图传宽度，null返回原图
+     * @returns {Promise<string|null>} dataUrl base64
+     */
+    async #readCoverFromFile(filepath, resizeWidth = null) {
+        console.debug('readCoverFromFile meta', filepath);
+        try {
+            const meta = await musicMetadata.parseFile(filepath, {
+                skipCovers: false
+            });
+            const pictureList = meta.common?.picture;
+            if (!pictureList || pictureList.length === 0) {
+                return null;
+            }
+            const pic = pictureList[0];
+            let imageBuffer = pic.data;
+            // 需要缩略图，进行等比缩放
+            if (resizeWidth && Number.isInteger(resizeWidth)) {
+                imageBuffer = await sharp(pic.data)
+                    .resize({ width: resizeWidth, height: resizeWidth, fit: 'inside' })
+                    .toBuffer();
+            }
+            return `data:${pic.format};base64,${imageBuffer.toString('base64')}`;
+        } catch (err) {
+            console.warn('读取音频封面失败', filepath, err.message);
+            return null;
+        }
+    }
+
+    /**
+     * 根据uuid获取曲目封面
+     * @param {string} uuid
+     * @param {{thumbnailWidth?:number}} opts  thumbnailWidth:缩略图宽度，不传返回原图
+     * @returns {Promise<string|null>}
+     */
+    async getCoverByUuid(uuid, opts = {}) {
+        const track = this.#persistData.playlist.find(t => t.uuid === uuid);
+        console.warn('getCoverByUuid', uuid, track);
+        if (!track || !track.filepath) {
+            return null;
+        }
+        const { thumbnailWidth } = opts;
+        return await this.#readCoverFromFile(track.filepath, thumbnailWidth ?? null);
+    }
+
     async destroy() {
+        if(this.#destroyed) return;
+        this.#destroyed = true;
         try {
             await super.destroy();
+            this.#mpvPlayer.removeAllListeners();
+            await this.#mpvPlayer.destroy();
         } catch (e) {
             console.warn('PlayService super destroy error', e);
         }
-        this.#mpvPlayer.removeAllListeners();
-        await this.#mpvPlayer.destroy();
     }
 }
 module.exports = PlayService;

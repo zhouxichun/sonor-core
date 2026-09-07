@@ -1,0 +1,18 @@
+[Unit]
+Description=Sonor‑Core Dev Service
+After=network.target
+
+[Service]
+Type=simple
+User=firefly
+Group=firefly
+WorkingDirectory=/firefly/projects/sonor-core
+ExecStart=/usr/bin/node index.js
+Restart=on-failure
+RestartSec=2
+# 开发环境输出完整日志到journal
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+# 开发环境不设置WantedBy，避免开机自动拉起

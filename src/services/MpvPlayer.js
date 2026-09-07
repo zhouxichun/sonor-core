@@ -47,6 +47,7 @@ class MpvPlayer extends EventEmitter {
 
     setVolume(vol) {
         this.#sendCommand(['set_property', 'volume',  Math.min(Math.max(vol, 0), 100)]);
+        this.#sendCommand(["set_property", "mute", false]);
     }
 
     setEQ(eqString) {
@@ -244,6 +245,7 @@ class MpvPlayer extends EventEmitter {
             }
             case 'mute': {
                 const muted = !!msg.data;
+                console.log('[MpvPlayer] Mute state changed:', muted);
                 this.emit(MpvPlayer.EVENTS.MUTE_TOGGLE, muted);
                 break;
             }

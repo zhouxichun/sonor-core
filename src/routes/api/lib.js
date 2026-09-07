@@ -20,19 +20,23 @@ async function libRoute(fastify, opts) {
     };
   });
 
-  // 获取歌手列表（带歌曲数量），不分页
-  fastify.get('/lib/artists', async () => {
-    const list = audioLibraryService.getDistinctArtists();
-    const data = list.map(item => ({
-      name: item.name,
-      count: item.count
-    }));
-    return { result: data };
-  });
-
   // 获取专辑列表（带歌曲数量），不分页
-  fastify.get('/lib/albums', async () => {
-    const list = audioLibraryService.getDistinctAlbums();
+  fastify.get('/lib/grouptotal/:group', async (request) => {
+    const { group } = request.params;
+    let list;
+    switch (group) {
+      case 'artist':
+        list = audioLibraryService.getDistinctArtists();
+        break;
+      case 'album':
+        list = audioLibraryService.getDistinctAlbums();
+        break;
+      case 'genre':
+        list = audioLibraryService.getDistinctGenres();
+        break;
+      default:
+        throw new Error(`Unsupported group: ${group}`);
+    }
     const data = list.map(item => ({
       name: item.name,
       count: item.count
@@ -40,15 +44,21 @@ async function libRoute(fastify, opts) {
     return { result: data };
   });
 
-  // 获取流派列表（带歌曲数量），不分页
-  fastify.get('/lib/genres', async () => {
-    const list = audioLibraryService.getDistinctGenres();
-    const data = list.map(item => ({
-      name: item.name,
-      count: item.count
-    }));
-    return { result: data };
+  /**
+   * GET /api/player/track/:uuid/cover
+   * query: thumbnailWidth  可选，指定则返回缩略图，不填返回原图
+   */
+  fastify.get('/lib/track/:uuid/cover', async (req, reply) => {
+    const { uuid } = req.params;
+    const { thumbnailWidth } = req.query;
+    const opts = {};
+    if(thumbnailWidth) {
+        opts.thumbnailWidth = Number(thumbnailWidth);
+    }
+    const cover = await audioLibraryService.getCoverByUuid(uuid, opts);
+    return {result: cover};
   });
+
 }
 
 module.exports = libRoute;
