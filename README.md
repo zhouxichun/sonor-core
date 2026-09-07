@@ -8,12 +8,13 @@ linux平台，基于Node.js的本地音频播放服务和极简网页客户端�
 
 ---
 🚀 快速启动
+
 sudo apt install mpv
 
 npm install
 
 npm run start
 
-浏览器打开：http://localhost:8080
+浏览器打开：http://ip:8080
 
 
