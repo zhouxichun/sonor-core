@@ -1,16 +1,14 @@
 const EventEmitter = require('events');
 const { execFile } = require('child_process');
-
+const logger = require('../utils/logger')(__dirname);
 class UsbDriver extends EventEmitter {
     static #EVENTS = {
         USB_FOUND: 'UsbDriver:usb_found',
         ERROR: 'UsbDriver:error'
     };
-
     #devices;
     #options;
     #abortController;
-
     /**
      * @param {object} [options={}]
      */
@@ -19,32 +17,27 @@ class UsbDriver extends EventEmitter {
         this.#devices = null;
         this.#options = { ...options };
         this.#abortController = new AbortController();
+        logger.info('UsbDriver instance created');
     }
-
     async start(){
+        logger.info('UsbDriver start()');
         await this.loadDevices();
     }
-
     /**
      * 订阅USB发现事件
      * @param {Function} callback
      */
-    onUsbFound(callback) {
-        this.on(UsbDriver.#EVENTS.USB_FOUND, callback);
-    }
-
+    onUsbFound(callback) { this.on(UsbDriver.#EVENTS.USB_FOUND, callback); }
     /**
      * 订阅错误事件
      * @param {Function} callback
      */
-    onError(callback) {
-        this.on(UsbDriver.#EVENTS.ERROR, callback);
-    }
-
+    onError(callback) { this.on(UsbDriver.#EVENTS.ERROR, callback); }
     /**
      * 加载USB挂载设备列表
      */
     async loadDevices() {
+        logger.debug('UsbDriver loadDevices begin');
         this.#devices = [];
         const signal = this.#abortController?.signal;
         try {
@@ -72,30 +65,31 @@ class UsbDriver extends EventEmitter {
                         });
                 }
             });
+            logger.info(`UsbDriver detected usb mount points count:${this.#devices.length}, devices:${JSON.stringify(this.#devices)}`);
             this.emit(UsbDriver.#EVENTS.USB_FOUND, [...this.#devices]);
         } catch (err) {
             this.#emitError('USB设备加载失败', err);
         }
     }
-
     #emitError(message, err) {
-        console.error(message, err);
+        logger.error(`${message}: ${err.message}`);
         this.emit(UsbDriver.#EVENTS.ERROR, { message, error: err });
     }
-
     /**
      * 销毁实例：终止子进程、清空状态、清除全部事件监听
      * 调用后实例不可复用
      */
     destroy() {
+        logger.info('UsbDriver destroy()');
         if (this.#abortController) {
             this.#abortController.abort();
+            logger.debug('UsbDriver abortController aborted');
             this.#abortController = null;
         }
         this.removeAllListeners();
         this.#devices = null;
         this.#options = {};
+        logger.debug('UsbDriver destroy completed');
     }
 }
-
 module.exports = UsbDriver;

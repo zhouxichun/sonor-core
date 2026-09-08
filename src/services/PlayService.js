@@ -5,10 +5,11 @@ const MpvPlayer = require('./MpvPlayer');
 const path = require('path');
 const musicMetadata = require('music-metadata');
 const sharp = require('sharp');
-
+const logger = require('../utils/logger')(__dirname);
 class PlayService extends SonorService {
     static EVENTS = {
         STATUS: 'playService:status',
+        CURRENT_TRACK:'playService:current_track',
         CURRENTTIME_UPDATED: 'mpvplayer:currenttime_updated'
     };
     #destroyed;
@@ -37,6 +38,7 @@ class PlayService extends SonorService {
         this.#dataFile = path.join(this.dataPath, 'playstate.json');
         this.#mpvPlayer = new MpvPlayer({ updateInterval: 1000 });
         this.#mpvPlayer.onPlay(() => {
+            logger.debug('PlayService mpv onPlay event');
             this.#playing = true;
             this.#paused = false;
             this.#emitStatus();
@@ -45,36 +47,44 @@ class PlayService extends SonorService {
             this.emit(PlayService.EVENTS.CURRENTTIME_UPDATED, sec);
         });
         this.#mpvPlayer.onEnd(() => {
+            logger.info('PlayService track end‑file event');
             this.#playing = false;
             this.#paused = false;
             this.#emitStatus();
-            this.playNext(1).catch(err => console.error('playNext err', err));
+            this.playNext(1).catch(err => logger.error(`playNext err ${err.message}`));
         });
         this.#mpvPlayer.onStop(() => {
+            logger.info('PlayService mpv onStop event');
             this.#playing = false;
             this.#paused = false;
             this.#emitStatus();
         });
         // 暂停状态完全由mpv事件同步，不手动猜测
         this.#mpvPlayer.onPauseToggle((paused) => {
+            logger.debug(`PlayService pause toggle event, paused: ${paused}`);
             this.#paused = paused;
             this.#emitStatus();
         });
         // 静音状态完全由mpv事件同步
         this.#mpvPlayer.onMuteToggle((muted) => {
+            logger.info(`PlayService mute toggle event, muted: ${muted}`);
             this.#muted = muted;
             this.#emitStatus();
         });
         this.#mpvPlayer.onError((err) => {
-            console.log('mpv error', err);
+            logger.error(`PlayService mpv error event ${err.message}`);
             this.#emitStatus();
         });
+        
+        logger.info(`PlayService instance created.`);
     }
-
     #emitStatus() {
         this.emit(PlayService.EVENTS.STATUS, this.getStatus());
     }
-
+    #emitCurrentTrack(){
+        logger.info('track play event emit');
+        this.emit(PlayService.EVENTS.CURRENT_TRACK, this.getCurrentTrack());
+    }
     getStatus() {
         return {
             currentIndex: this.#persistData.currentIndex,
@@ -87,31 +97,34 @@ class PlayService extends SonorService {
             muted: this.#muted
         };
     }
-
     async start() {
+        logger.info('PlayService start()');
         await this.#loadState();
         this.#mpvPlayer.init();
         this.#mpvPlayer.setVolume(this.#persistData.volume);
         this.#mpvPlayer.setEQ(this.#persistData.eq);
         this.#mpvPlayer.setLoop(this.#persistData.loop);
+        logger.info(`PlayService loaded persisted state.`);
         this.#emitStatus();
     }
-
     /**
      * 从磁盘加载持久化数据
      */
     async #loadState() {
         if (!this.#dataFile) return;
         try {
-            if (!fsSync.existsSync(this.#dataFile)) return;
+            if (!fsSync.existsSync(this.#dataFile)) {
+                logger.debug('PlayService playstate.json not exist, skip load');
+                return;
+            }
             const raw = await fs.readFile(this.#dataFile, 'utf8');
             const parsed = JSON.parse(raw);
             this.#persistData = { ...this.#persistData, ...parsed };
+            logger.debug('PlayService loadState success');
         } catch (err) {
-            console.warn('PlayService load state failed:', err.message);
+            logger.warn(`PlayService load state failed: ${err.message}`);
         }
     }
-
     /**
      * 保存持久化数据到磁盘
      */
@@ -119,11 +132,11 @@ class PlayService extends SonorService {
         if (!this.#dataFile) return;
         try {
             await fs.writeFile(this.#dataFile, JSON.stringify(this.#persistData, null, 2), 'utf8');
+            logger.debug('PlayService saveState ok');
         } catch (err) {
-            console.warn('PlayService save state failed:', err.message);
+            logger.warn(`PlayService save state failed: ${err.message}`);
         }
     }
-
     #calcIndex(direction) {
         let next = -1;
         const len = this.#persistData.playlist.length;
@@ -133,53 +146,58 @@ class PlayService extends SonorService {
             do {
                 next = Math.floor(Math.random() * len);
             } while(next === this.#persistData.currentIndex && len > 1);
+            logger.debug(`PlayService calcIndex random mode, next: ${next}`);
             return next;
         }
         next = this.#persistData.currentIndex + direction;
         if (next >= len) next = 0;
         else if (next < 0) next = len - 1;
+        logger.debug(`PlayService calcIndex normal mode, direction: ${direction}, next: ${next}`);
         return next;
     }
-
-     /**
+    /**
      * 追加一批曲目到当前播放列表（会持久化）
      * @param {Array} trackList
      */
     async pushList(trackList) {
         if (!Array.isArray(trackList)) {
+            logger.warn('PlayService pushList: trackList not array');
             throw new Error('trackList must be array');
         }
-
+        const input = trackList.length;
         // 获取已存在的uuid集合，用于快速查重
         const existUuids = new Set(
             this.#persistData.playlist.map(item => item.uuid)
         );
-
         // 过滤：只加入uuid不在现有列表的曲目
         const newItems = trackList.filter(track => {
             return track && track.uuid && !existUuids.has(track.uuid);
         });
-
         if(newItems.length > 0) {
             this.#persistData.playlist.push(...newItems);
+            logger.info(`PlayService pushList add items count: ${newItems.length}, total playlist: ${this.#persistData.playlist.length}`);
             await this.#saveState();
         }
+        return {
+            inputCount: input,
+            addedCount: newItems.length
+        }
     }
-
     async clearPlaylist() {
+        logger.info('PlayService clearPlaylist');
         this.#mpvPlayer.stop();
         this.#persistData.playlist = [];
         this.#persistData.currentIndex = -1;
         await this.#saveState();
         this.#emitStatus();
     }
-
     /**
      * 根据uuid数组删除播放列表中的曲目
      * @param {string[]} uuidArray
      */
     async removeTracksByUuids(uuidArray) {
         if (!Array.isArray(uuidArray)) {
+            logger.warn('PlayService removeTracksByUuids: uuidArray not array');
             throw new Error('uuidArray must be array');
         }
         const removeSet = new Set(uuidArray);
@@ -187,28 +205,33 @@ class PlayService extends SonorService {
         const newList = oldList.filter(item => !removeSet.has(item.uuid));
         const currentItem = oldList[this.#persistData.currentIndex];
         if (currentItem && removeSet.has(currentItem.uuid)) {
+            logger.info('PlayService removeTracksByUuids remove current playing track, stop player');
             this.#persistData.currentIndex = -1;
-            this.#mpvPlayer.stop(); 
+            this.#mpvPlayer.stop();
         }
         this.#persistData.playlist = newList;
+        logger.info(`PlayService removeTracksByUuids removed count: ${uuidArray.length}, new playlist size: ${newList.length}`);
         await this.#saveState();
         this.#emitStatus();
     }
-
     /**
      * 播放当前曲目
      * @returns {Promise<boolean>}
      */
     async playPause() {
         if (!this.#playing) {
-            if(this.#persistData.playlist.length === 0) return false;
+            if(this.#persistData.playlist.length === 0) {
+                logger.debug('PlayService playPause: playlist empty');
+                return false;
+            }
             const idx = this.#persistData.currentIndex;
-            if (idx === -1 || idx >= this.#persistData.playlist.length)
-                idx = 0;
-            return await this.#playByIndex(idx);
+            const targetIdx = (idx === -1 || idx >= this.#persistData.playlist.length) ? 0 : idx;
+            logger.info(`PlayService playPause start play at index ${targetIdx}`);
+            return await this.#playByIndex(targetIdx);
         }else{
-           this.#mpvPlayer.togglePause();
-           return true; 
+            logger.debug('PlayService playPause toggle pause');
+            this.#mpvPlayer.togglePause();
+            return true;
         }
     }
     /**
@@ -217,72 +240,90 @@ class PlayService extends SonorService {
      * @returns {Promise<boolean>}
      */
     async playByUuid(uuid) {
+        logger.info(`PlayService playByUuid ${uuid}`);
         const idx = this.#persistData.playlist.findIndex(item => item.uuid === uuid);
-        if (idx === -1) return false;
+        if (idx === -1) {
+            logger.warn(`PlayService playByUuid not found, uuid: ${uuid}`);
+            return false;
+        }
         return await this.#playByIndex(idx);
     }
-
     /**
      * 停止播放
      * @returns {boolean}
      */
     stop() {
         if (!this.#playing) {
+            logger.debug('PlayService stop: not playing, skip');
             return false;
         }
+        logger.info('PlayService stop()');
         this.#mpvPlayer.stop();
         return true;
     }
-
     /**
      * 播放下一曲/上一曲
      * @param {number} dir 1=下一曲，-1=上一曲
      * @returns {Promise<boolean>}
      */
     async playNext(dir) {
+        logger.info(`PlayService playNext dir: ${dir}`);
         const idx = this.#calcIndex(dir);
-        if (idx === -1) return false;
+        if (idx === -1) {
+            logger.warn('PlayService playNext calc index return -1');
+            return false;
+        }
         return await this.#playByIndex(idx);
     }
-
     /**
      * @param {number} index
      * @returns {Promise<boolean>}
      */
     async #playByIndex(index) {
         const item = this.#persistData.playlist[index];
-        if (!item || !item.filepath) return false;
+        if (!item || !item.filepath) {
+            logger.warn(`PlayService #playByIndex invalid item index: ${index}`);
+            return false;
+        }
+        logger.info(`PlayService #playByIndex index:${index}, filepath:${item.filepath}`);
         this.#persistData.currentIndex = index;
         await this.#saveState();
         if (this.#playing) {
+            logger.debug('PlayService #playByIndex: is playing, stop and wait');
             this.stop();
             await new Promise(resolve => setTimeout(resolve, 500));
         }
         this.#mpvPlayer.play(item.filepath);
+        this.#emitCurrentTrack();
         return true;
     }
-
     /**
      * 切换暂停/播放
      * @returns {boolean}
      */
     togglePause() {
-        if (!this.#playing) return false;
+        if (!this.#playing) {
+            logger.debug('PlayService togglePause skip: not playing');
+            return false;
+        }
+        logger.debug('PlayService togglePause call mpv');
         this.#mpvPlayer.togglePause();
         return true;
     }
-
     /**
      * 跳转播放位置
      * @param {number} pos 秒
      * @returns {boolean}
      */
     seek(pos) {
-        if (!this.#playing) return false;
+        if (!this.#playing) {
+            logger.debug('PlayService seek skip: not playing');
+            return false;
+        }
+        logger.info(`PlayService seek pos: ${pos}`);
         this.#mpvPlayer.seek(pos);
         return true;
     }
-
     /**
      * 设置音量
      * @param {number} vol 0‑100
@@ -290,85 +331,91 @@ class PlayService extends SonorService {
      */
     async setVolume(vol) {
         const val = Math.min(Math.max(vol, 0), 100);
+        logger.info(`PlayService setVolume ${val}`);
         this.#persistData.volume = val;
         this.#mpvPlayer.setVolume(val);
         await this.#saveState();
         this.#emitStatus();
         return true;
     }
-
     /**
      * 切换静音
      * @returns {boolean}
      */
     toggleMute() {
-        if (!this.#playing) return false;
+        if (!this.#playing) {
+            logger.debug('PlayService toggleMute skip: not playing');
+            return false;
+        }
+        logger.debug('PlayService toggleMute call mpv');
         this.#mpvPlayer.toggleMute();
         return true;
     }
-
     /**
      * 设置均衡器参数
      * @param {string} eqStr
      * @returns {Promise<boolean>}
      */
     async setEQ(eqStr) {
+        logger.info(`PlayService setEQ ${eqStr}`);
         this.#persistData.eq = eqStr ?? '';
         this.#mpvPlayer.setEQ(this.#persistData.eq);
         await this.#saveState();
         this.#emitStatus();
         return true;
     }
-
     /**
      * 设置循环播放（开关切换）
      * @returns {Promise<boolean>}
      */
     async loop() {
         this.#persistData.loop = !this.#persistData.loop;
+        logger.info(`PlayService toggle loop: ${this.#persistData.loop}`);
         this.#mpvPlayer.setLoop(this.#persistData.loop);
         await this.#saveState();
         this.#emitStatus();
         return this.#persistData.loop;
     }
-
     /**
      * 设置随机播放（开关切换）
      * @returns {Promise<boolean>}
      */
     async random() {
         this.#persistData.random = !this.#persistData.random;
+        logger.info(`PlayService toggle random: ${this.#persistData.random}`);
         await this.#saveState();
         this.#emitStatus();
         return this.#persistData.random;
     }
-
     getPlaylist() {
         return [...this.#persistData.playlist];
     }
-
     getCurrentTrack() {
         const idx = this.#persistData.currentIndex;
         const list = this.#persistData.playlist;
         if(idx <0 || idx >= list.length) return null;
         return {...list[idx]};
     }
-
     /**
      * @param {(payload: any)=>void} callback
      */
     onTimeUpdated(callback) {
         return this.on(PlayService.EVENTS.CURRENTTIME_UPDATED, callback);
     }
-
     /**
      * @param {(payload: any)=>void} callback
      */
     onStateUpdated(callback) {
         return this.on(PlayService.EVENTS.STATUS, callback);
     }
-
-
+    /**
+     * 
+     * @param {*} callback 
+     * @returns 
+     */
+    onCurrentTrack(callback){
+        return this.on(PlayService.EVENTS.CURRENT_TRACK, callback);
+    }
     /**
      * 内部读取音频内嵌封面
      * @param {string} filepath
@@ -376,13 +423,14 @@ class PlayService extends SonorService {
      * @returns {Promise<string|null>} dataUrl base64
      */
     async #readCoverFromFile(filepath, resizeWidth = null) {
-        console.debug('readCoverFromFile meta', filepath);
+        logger.debug(`PlayService #readCoverFromFile ${filepath} ${resizeWidth}`);
         try {
             const meta = await musicMetadata.parseFile(filepath, {
                 skipCovers: false
             });
             const pictureList = meta.common?.picture;
             if (!pictureList || pictureList.length === 0) {
+                logger.debug('PlayService #readCoverFromFile no embedded picture');
                 return null;
             }
             const pic = pictureList[0];
@@ -395,11 +443,10 @@ class PlayService extends SonorService {
             }
             return `data:${pic.format};base64,${imageBuffer.toString('base64')}`;
         } catch (err) {
-            console.warn('读取音频封面失败', filepath, err.message);
+            logger.warn(`PlayService 读取音频封面失败 ${filepath} ${err.message}`);
             return null;
         }
     }
-
     /**
      * 根据uuid获取曲目封面
      * @param {string} uuid
@@ -408,23 +455,28 @@ class PlayService extends SonorService {
      */
     async getCoverByUuid(uuid, opts = {}) {
         const track = this.#persistData.playlist.find(t => t.uuid === uuid);
-        console.warn('getCoverByUuid', uuid, track);
+        logger.debug(`PlayService getCoverByUuid ${uuid}`);
         if (!track || !track.filepath) {
+            logger.warn(`PlayService getCoverByUuid track not found ${uuid}`);
             return null;
         }
         const { thumbnailWidth } = opts;
         return await this.#readCoverFromFile(track.filepath, thumbnailWidth ?? null);
     }
-
     async destroy() {
-        if(this.#destroyed) return;
+        if(this.#destroyed) {
+            logger.debug('PlayService destroy already destroyed, skip');
+            return;
+        }
+        logger.info('PlayService destroy begin');
         this.#destroyed = true;
         try {
             await super.destroy();
             this.#mpvPlayer.removeAllListeners();
             await this.#mpvPlayer.destroy();
+            logger.info('PlayService destroy complete');
         } catch (e) {
-            console.warn('PlayService super destroy error', e);
+            logger.warn(`PlayService super destroy error ${e.message}`);
         }
     }
 }

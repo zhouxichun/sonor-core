@@ -1,24 +1,21 @@
 /**
  * 播放器相关API路由
  * @param {FastifyInstance} fastify
- * @param {{playService: PlayService, audioLibraryService: AudioLibraryService}} opts
+ * @param {{}} opts
  */
 async function playerRoutes(fastify, opts) {
-  const { playService, audioLibraryService } = opts;
-
   /**
    * GET /api/player/current
    * 获取当前播放曲目，页面初始化兜底
    */
   fastify.get('/player/current', () => {
-    const track = playService.getCurrentTrack();
-    return { result: track };
+    return fastify.playService.getCurrentTrack();
   });
 
   fastify.get('/player/list', () => {
-    const playlist = playService.getPlaylist();
-    return { result: playlist };
+    return fastify.playService.getPlaylist();
   });
+
   /**
    * POST /api/player/list
    * 批量追加曲目到播放列表，前端只传uuid数组，内部从音频库补齐完整track
@@ -36,15 +33,9 @@ async function playerRoutes(fastify, opts) {
     const uuidList = req.body;
     // 根据uuid批量获取完整曲目对象
     const trackList = uuidList
-      .map(uuid => audioLibraryService.getTrackByUuid(uuid))
+      .map(uuid => fastify.audioLibraryService.getTrackByUuid(uuid))
       .filter(Boolean); // 过滤找不到的曲目
-    await playService.pushList(trackList);
-    return {
-      result: {
-        totalInput: uuidList.length,
-        totalLoaded: trackList.length
-      }
-    };
+    return await fastify.playService.pushList(trackList);
   });
 
   /**
@@ -52,8 +43,7 @@ async function playerRoutes(fastify, opts) {
    * 清空播放歌单
    */
   fastify.post('/player/list/clear', async () => {
-    await playService.clearPlaylist();
-    return { result: true };
+    return await fastify.playService.clearPlaylist();
   });
 
   /**
@@ -64,28 +54,28 @@ async function playerRoutes(fastify, opts) {
   fastify.post('/player/list/remove', {
     schema: {
       body: {
-        type: 'array',
-        items: { type: 'string' }
+        type: 'object',
+        required: ['uuid'],
+        properties: {
+          uuid: { type: 'string' }
+        }
       }
     }
   }, async (req) => {
     /** @type {string[]} */
-    const uuidList = req.body;
-    await playService.removeTracksByUuids(uuidList);
-    return { result: true };
+    return await fastify.playService.removeTracksByUuids([req.body.uuid]);
   });
 
   /**
-   * POST /api/player/play
-   * 根据uuid播放指定曲目
-   * body: { uuid: string }
+   * POST /api/player/playpause
+   * 播放/暂停切换
    */
   fastify.post('/player/playpause', async (req) => {
-    const result = await playService.playPause();
-    return { result };
+    return await fastify.playService.playPause();
   });
+
   /**
-   * POST /api/player/play
+   * POST /api/player/play/uuid
    * 根据uuid播放指定曲目
    * body: { uuid: string }
    */
@@ -100,49 +90,47 @@ async function playerRoutes(fastify, opts) {
       }
     }
   }, async (req) => {
-    const { uuid } = req.body;
-    const result = await playService.playByUuid(uuid);
-    return { result };
+    return await fastify.playService.playByUuid(req.body.uuid);
   });
+
   /**
    * POST /api/player/stop
    * 停止播放，同步接口，无需await
    */
   fastify.post('/player/stop', async () => {
-    const result = playService.stop();
-    return { result };
+    return fastify.playService.stop();
   });
+
   /**
    * POST /api/player/next
    * 播放下一曲，异步接口，需要await
    */
   fastify.post('/player/next', async () => {
-    const result = await playService.playNext(1);
-    return { result };
+    return await fastify.playService.playNext(1);
   });
+
   /**
    * POST /api/player/prev
    * 播放上一曲，异步接口，需要await
    */
   fastify.post('/player/prev', async () => {
-    const result = await playService.playNext(-1);
-    return { result };
+    return await fastify.playService.playNext(-1);
   });
+
   /**
    * POST /api/player/pause
    * 切换播放/暂停，同步接口，无需await
    */
   fastify.post('/player/pause', async () => {
-    const result = playService.togglePause();
-    return { result };
+    return fastify.playService.togglePause();
   });
+
   /**
    * POST /api/player/mute
    * 切换静音开关，同步接口，无需await
    */
   fastify.post('/player/mute', async () => {
-    const result = playService.toggleMute();
-    return { result };
+    return fastify.playService.toggleMute();
   });
 
   /**
@@ -161,9 +149,7 @@ async function playerRoutes(fastify, opts) {
       }
     }
   }, async (req) => {
-    const { pos } = req.body;
-    const result = playService.seek(pos);
-    return { result };
+    return fastify.playService.seek(req.body.pos);
   });
 
   /**
@@ -181,10 +167,9 @@ async function playerRoutes(fastify, opts) {
       }
     }
   }, async (req) => {
-    const { eq } = req.body;
-    const result = await playService.setEQ(eq);
-    return { result };
+    return await fastify.playService.setEQ(req.body.eq);
   });
+
   /**
    * POST /api/player/volume
    * 设置音量 0‑100，异步接口，需要await
@@ -201,25 +186,24 @@ async function playerRoutes(fastify, opts) {
       }
     }
   }, async (req) => {
-    const { volume } = req.body;
-    const result = await playService.setVolume(volume);
-    return { result };
+    return await fastify.playService.setVolume(req.body.volume);
   });
+
   /**
    * POST /api/player/loop
    * 切换循环播放开关，异步接口，需要await
    */
   fastify.post('/player/loop', async () => {
-    const result = await playService.loop();
-    return { result };
+    return await fastify.playService.loop();
   });
+
   /**
    * POST /api/player/random
    * 切换随机播放开关，异步接口，需要await
    */
   fastify.post('/player/random', async () => {
-    const result = await playService.random();
-    return { result };
+    return await fastify.playService.random();
   });
 }
+
 module.exports = playerRoutes;

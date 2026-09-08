@@ -149,4 +149,4 @@ vite.config.ts.timestamp-*
 .vite/
 
 #local service file
-src/sonor-core.service
+sonor-core.service
