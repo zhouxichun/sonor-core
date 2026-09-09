@@ -37,6 +37,10 @@
         <div class="view-container view-container--flex-scroll">
             <!-- 视图1：播放详情 -->
             <div ng-if="viewMode === 'player'" class="player-view-container">
+                <!-- 歌词滚动开关悬浮按钮 -->
+                <button class="lyric-scroll-toggle-btn" ng-click="toggleLyricAutoScroll()" title="切换歌词自动滚动">
+                    <i class="fa" ng-class="lyricAutoScroll ? 'fa-lock' : 'fa-unlock'"></i>
+                </button>
                 <div class="player-detail">
                     <!-- 固定头部meta区域 -->
                     <div class="lyric-meta">
@@ -171,8 +175,20 @@
                 <div class="setup-item-wrap">
                     <h3 class="setup-title">音量</h3>
                     <div class="setup-body">
-                        <input type="range" min="0" max="100" ng-model="volume" 
-                        onchange="angular.element(this).scope().setVolume(this.value)">
+                        <input type="range" min="0" max="100" ng-model="volume" ng-change="setVolume(volume)">
+                    </div>
+                </div>
+                <div class="setup-item-wrap">
+                    <h3 class="setup-title">系统操作</h3>
+                    <div class="setup-body">
+                        <div class="system-btn-row">
+                            <button ng-click="systemReboot()" title="重启设备">
+                                <i class="fa fa-refresh"></i> 重启
+                            </button>
+                            <button ng-click="systemShutdown()" title="关机设备">
+                                <i class="fa fa-power-off"></i> 关机
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>

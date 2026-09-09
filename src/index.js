@@ -8,6 +8,7 @@ const path = require('path');
 const fastifyStatic = require('@fastify/static');
 const config = require('./config');
 const logger = require('./utils/logger')(__dirname);
+const SystemService = require('./services/SystemService');
 
 let shuttingDown = false;
 
@@ -29,6 +30,7 @@ async function createApp() {
   fastify.decorate('audioLibraryService', new AudioLibraryService({ dataPath }));
   fastify.decorate('playService', new PlayService({ dataPath }));
   fastify.decorate('wsClients', new Set());
+  fastify.decorate('systemService', new SystemService({ dataPath }));
 
   // 注册跨域插件，允许前端浏览器跨域访问API
   logger.info('fastify registering plugin: @fastify/cors');
@@ -53,10 +55,22 @@ async function createApp() {
 
   // Fastify就绪生命周期钩子：服务内部全部插件加载完成后，启动业务层服务
   fastify.addHook('onReady', async () => {
-    logger.info('rastify onReady hook, starting business services');
-    await fastify.audioLibraryService.start();
-    await fastify.playService.start();
-    logger.info('All Service started');
+    logger.info('fastify onReady hook, starting business services');
+    try {
+        logger.info('Starting AudioLibraryService...');
+        await fastify.audioLibraryService.start();
+        logger.info('AudioLibraryService started successfully');
+        
+        logger.info('Starting PlayService...');
+        await fastify.playService.start();
+        logger.info('PlayService started successfully');
+        
+        logger.info('All Service started');
+    } catch (err) {
+        logger.error('Error starting services in onReady hook:', err);
+        logger.error('Error stack:', err.stack);
+        throw err; // 重新抛出错误，让 Fastify 知道启动失败
+    }
   });
 
   // 服务关闭生命周期钩子：服务执行关闭流程时打印日志

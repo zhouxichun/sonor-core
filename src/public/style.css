@@ -459,12 +459,30 @@ h4 {
 
 /* ==========播放详情视图 歌词模块 ========== */
 .player-view-container {
+  position: relative;
   padding: 16px;
   background: transparent;
   height: 100%;
   display: flex;
   flex-direction: column;
 }
+.lyric-scroll-toggle-btn{
+    position: absolute;
+    top:160px;
+    right:16px;
+    width:36px;
+    height:36px;
+    z-index: 50;
+    background:#272727;
+    border:1px solid #383838;
+    border-radius:6px;
+    color:#eee;
+    cursor:pointer;
+}
+.lyric-scroll-toggle-btn:hover{
+    background:#383838;
+}
+
 .player-detail {
   display: flex;
   flex-direction: column;
@@ -679,6 +697,18 @@ h4 {
   border-radius: 8px;
   object-fit: contain;
 }
+
+.system-btn-row{
+    display:flex;
+    justify-content:center;
+    gap:18px;
+}
+
+.system-btn-row button{
+  width: 100px;
+  height: 38px;
+}
+
 
 /* =========响应式小屏========== */
 @media (max-width: 960px) {

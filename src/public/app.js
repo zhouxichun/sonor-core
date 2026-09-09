@@ -70,10 +70,10 @@ app.controller('MainCtrl',['$scope','$http','$timeout',function($scope,$http,$ti
      * 
      */
     $scope.$watch('viewMode', function(newVal){
-        if(newVal === 'playlist'){
-           $scope.loadPlaylist();
-        }
         // 切到设置页面，加载目录列表
+        if(newVal === 'playlist'){
+            $scope.scrollToCurrentPlaying();
+        }
         if(newVal === 'setup'){
             $scope.loadFolderList();
         }
@@ -89,6 +89,12 @@ app.controller('MainCtrl',['$scope','$http','$timeout',function($scope,$http,$ti
         const sec = Math.floor(s%60);
         return String(m).padStart(2,'0')+':'+String(sec).padStart(2,'0');
     };
+    //歌词滚动开关
+    $scope.lyricAutoScroll = true;
+    $scope.toggleLyricAutoScroll = function(){
+        $scope.lyricAutoScroll = !$scope.lyricAutoScroll;
+    };
+
     /**
      * 关闭播放列表下拉菜单
      */
@@ -105,14 +111,17 @@ app.controller('MainCtrl',['$scope','$http','$timeout',function($scope,$http,$ti
         if ($scope.currentIndex === undefined || $scope.currentIndex < 0) {
             return;
         }
-        const domId = `playlist-item-${$scope.currentIndex}`;
-        const el = document.getElementById(domId);
-        if (!el) return;
-        el.scrollIntoView({
-            behavior: 'smooth',
-            block: 'center'
-        });
+        $timeout(function(){
+            const domId = `playlist-item-${$scope.currentIndex}`;
+            const el = document.getElementById(domId);
+            if (!el) return;
+            el.scrollIntoView({
+                behavior: 'smooth',
+                block: 'center'
+            });
+        })
     };
+
     /**
      * 打开封面弹窗
      * @param {Event} $event
@@ -168,7 +177,7 @@ app.controller('MainCtrl',['$scope','$http','$timeout',function($scope,$http,$ti
             const msg = JSON.parse(event.data);
             switch(msg.type){
                 case 'current_track':{
-                    console.log(msg.data);
+                    console.log('new track');
                     $scope.currentTrack = msg.data;
                     if(!$scope.currentTrack) return;
                     //进度条
@@ -178,8 +187,6 @@ app.controller('MainCtrl',['$scope','$http','$timeout',function($scope,$http,$ti
                     $scope.loadTrackThumbCover($scope.currentTrack.uuid);
                     //歌词
                     $scope.parsedLyric = parseLrc($scope.currentTrack.lyric);
-                    //
-                    $scope.scrollToCurrentPlaying();
                     break;
                 }
                 case 'player_status':{
@@ -192,6 +199,7 @@ app.controller('MainCtrl',['$scope','$http','$timeout',function($scope,$http,$ti
                         $scope.randomMode = d.random;
                         $scope.isMuted = d.muted;
                         $scope.currentIndex = d.currentIndex;
+                        $scope.scrollToCurrentPlaying();
                     });
                     break;
                 }
@@ -211,9 +219,9 @@ app.controller('MainCtrl',['$scope','$http','$timeout',function($scope,$http,$ti
                                 break;
                             }
                         }
-                        list.forEach((item,idx)=>{
-                            item.isActive = (idx === activeIndex);
-                        });
+                        list.forEach((item,idx)=>{ item.isActive = (idx === activeIndex);});
+
+                        if(!$scope.lyricAutoScroll) return;
                         // 歌词容器滚动到激活行，居中
                         if (activeIndex >= 0) {
                             $timeout(() => {
@@ -329,6 +337,7 @@ app.controller('MainCtrl',['$scope','$http','$timeout',function($scope,$http,$ti
             .finally(done);
         });
     };
+
     /**
      * 进度条点击跳转
      * @param {MouseEvent} $event
@@ -377,7 +386,6 @@ app.controller('MainCtrl',['$scope','$http','$timeout',function($scope,$http,$ti
         $http.get(`${apiBase}/player/list`)
         .then(res=>{
             $scope.playlistTracks = res.data || [];
-            $scope.scrollToCurrentPlaying();
         })
         .catch(()=>{
             $scope.showToast("获取播放列表失败");
@@ -394,6 +402,7 @@ app.controller('MainCtrl',['$scope','$http','$timeout',function($scope,$http,$ti
             return $http.post(`${apiBase}/player/list/remove`, {uuid:uuid})
             .then(()=>{
                 $scope.showToast("已从播放列表移除");
+                $scope.loadPlaylist();
             })
             .catch(()=>{ $scope.showToast("移除失败"); })
             .finally(done);
@@ -426,6 +435,7 @@ app.controller('MainCtrl',['$scope','$http','$timeout',function($scope,$http,$ti
             .then(res=>{
                 const count = res.data.addedCount || 0;
                 count > 0 ? $scope.showToast(`成功添加${count}首曲目到播放列表`) : $scope.showToast(`首曲已在播放列表中`);
+                $scope.loadPlaylist();
             })
             .catch(()=>{ $scope.showToast('添加失败'); })
             .finally(done);
@@ -506,8 +516,42 @@ app.controller('MainCtrl',['$scope','$http','$timeout',function($scope,$http,$ti
             .finally(done);
         });
     };
-    
+    /**
+     * 切换静音
+     */
+    $scope.setVolume = function(volume){
+        $scope.withLoading((done)=>{
+            return $http.post(`${apiBase}/player/volume`,{volume})
+            .catch(()=>{ $scope.showToast('音量调整失败'); })
+            .finally(done);
+        });
+    };
+
+    // 重启
+    $scope.systemReboot = function () {
+        if (!confirm('确认要重启设备？')) return;
+        $http.post('/api/system/reboot')
+        .then(()=>{
+            $scope.showToast('设备正在重启');
+        })
+        .catch(err=>{
+            $scope.showToast('重启指令发送失败');
+        });
+    };
+    // 关机
+    $scope.systemShutdown = function () {
+        if (!confirm('确认要关机设备？')) return;
+        $http.post('/api/system/shutdown')
+        .then(()=>{
+            $scope.showToast('设备正在关机');
+        })
+        .catch(err=>{
+            $scope.showToast('关机指令发送失败');
+        });
+    };
+
     // ====================== 页面初始化入口 ======================
-    $scope.switchGroup('artist');
     connectWs();
+    $scope.loadPlaylist();
+    $scope.switchGroup('artist');
 }]);
