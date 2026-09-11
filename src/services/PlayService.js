@@ -416,53 +416,7 @@ class PlayService extends SonorService {
     onCurrentTrack(callback){
         return this.on(PlayService.EVENTS.CURRENT_TRACK, callback);
     }
-    /**
-     * 内部读取音频内嵌封面
-     * @param {string} filepath
-     * @param {number|null} resizeWidth 需要缩略图传宽度，null返回原图
-     * @returns {Promise<string|null>} dataUrl base64
-     */
-    async #readCoverFromFile(filepath, resizeWidth = null) {
-        logger.debug(`PlayService #readCoverFromFile ${filepath} ${resizeWidth}`);
-        try {
-            const meta = await musicMetadata.parseFile(filepath, {
-                skipCovers: false
-            });
-            const pictureList = meta.common?.picture;
-            if (!pictureList || pictureList.length === 0) {
-                logger.debug('PlayService #readCoverFromFile no embedded picture');
-                return null;
-            }
-            const pic = pictureList[0];
-            let imageBuffer = pic.data;
-            // 需要缩略图，进行等比缩放
-            if (resizeWidth && Number.isInteger(resizeWidth)) {
-                imageBuffer = await sharp(pic.data)
-                    .resize({ width: resizeWidth, height: resizeWidth, fit: 'inside' })
-                    .toBuffer();
-            }
-            return `data:${pic.format};base64,${imageBuffer.toString('base64')}`;
-        } catch (err) {
-            logger.warn(`PlayService 读取音频封面失败 ${filepath} ${err.message}`);
-            return null;
-        }
-    }
-    /**
-     * 根据uuid获取曲目封面
-     * @param {string} uuid
-     * @param {{thumbnailWidth?:number}} opts  thumbnailWidth:缩略图宽度，不传返回原图
-     * @returns {Promise<string|null>}
-     */
-    async getCoverByUuid(uuid, opts = {}) {
-        const track = this.#persistData.playlist.find(t => t.uuid === uuid);
-        logger.debug(`PlayService getCoverByUuid ${uuid}`);
-        if (!track || !track.filepath) {
-            logger.warn(`PlayService getCoverByUuid track not found ${uuid}`);
-            return null;
-        }
-        const { thumbnailWidth } = opts;
-        return await this.#readCoverFromFile(track.filepath, thumbnailWidth ?? null);
-    }
+    
     async destroy() {
         if(this.#destroyed) {
             logger.debug('PlayService destroy already destroyed, skip');

@@ -22,13 +22,12 @@ app.controller('MainCtrl',['$scope','$http','$timeout',function($scope,$http,$ti
     $scope.currentIndex = -1;
     $scope.currentTrack = null;
     $scope.parsedLyric = [];
-    $scope.currentTrackLoadedCover = null;
+    $scope.currentCover = null;
+    $scope.themeColor = null;
     // UI通用状态
     $scope.loading = false;
     $scope.toastMessage = '';
     $scope.openDropdownUuid = null;
-    // 封面内存缓存
-    $scope.coverCache = {};
     // 弹窗状态
     $scope.showCoverPopup = false;
     // ====================== UI通用工具函数 ======================
@@ -60,7 +59,7 @@ app.controller('MainCtrl',['$scope','$http','$timeout',function($scope,$http,$ti
      * @param {object} track
      * @returns {string}
      */
-    $scope.getLosslessLabel = function(track){ return track.format.lossless ? '无损' : '有损'; };
+    $scope.getLosslessLabel = function(track){ return track.format.lossless ? '无损' : ''; };
     /**
      * 切换页面视图
      * @param {string} mode player / library / playlist / setup
@@ -128,7 +127,7 @@ app.controller('MainCtrl',['$scope','$http','$timeout',function($scope,$http,$ti
      */
     $scope.openCoverPopup = function($event) {
         $event.stopPropagation();
-        $scope.currentTrackLoadedCover && ($scope.showCoverPopup = true);
+        $scope.currentCover && ($scope.showCoverPopup = true);
     };
     /**
      * 关闭封面弹窗
@@ -175,9 +174,9 @@ app.controller('MainCtrl',['$scope','$http','$timeout',function($scope,$http,$ti
         ws.onopen = ()=>{ console.log('ws connected'); };
         ws.onmessage = (event)=>{
             const msg = JSON.parse(event.data);
+            console.log('websocket data', msg);
             switch(msg.type){
                 case 'current_track':{
-                    console.log('new track');
                     $scope.currentTrack = msg.data;
                     if(!$scope.currentTrack) return;
                     //进度条
@@ -362,20 +361,20 @@ app.controller('MainCtrl',['$scope','$http','$timeout',function($scope,$http,$ti
      * @returns {Promise<string|null>}
      */
     $scope.loadTrackThumbCover = function(uuid) {
-        if($scope.coverCache[uuid]){
-             $scope.currentTrackLoadedCover = $scope.coverCache[uuid];
-             return;
-        }
-        // 没缓存，发起http请求返回promise
         $http.get(`/api/lib/track/${uuid}/cover`, {
             params: { thumbnailWidth: 640 }
         })
         .then(res => {
-            $scope.coverCache[uuid] = res.data.cover;
-            $scope.currentTrackLoadedCover = res.data.cover;
+            $scope.currentCover = res.data.base64;
+            $scope.themeColor = res.data.theme;
         })
         .catch(() => {
             $scope.currentTrackLoadedCover = null;
+            $scope.themeColor = { h: 215, s: 0.55, l: 0.37 }})
+        .finally(()=>{
+            const {h} = $scope.themeColor;
+            const root = document.documentElement;
+            root.style.setProperty('--base-h', h);
         });
     };
     // ====================== 播放列表管理 ======================
@@ -434,7 +433,7 @@ app.controller('MainCtrl',['$scope','$http','$timeout',function($scope,$http,$ti
             return $http.post(`${apiBase}/player/list`, uuidList)
             .then(res=>{
                 const count = res.data.addedCount || 0;
-                count > 0 ? $scope.showToast(`成功添加${count}首曲目到播放列表`) : $scope.showToast(`首曲已在播放列表中`);
+                count > 0 ? $scope.showToast(`成功添加${count}首曲目到播放列表`) : $scope.showToast(`曲目已在播放列表中`);
                 $scope.loadPlaylist();
             })
             .catch(()=>{ $scope.showToast('添加失败'); })

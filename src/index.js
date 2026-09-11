@@ -21,6 +21,7 @@ async function createApp() {
 
   // 数据目录初始化
   const dataPath = path.join(__dirname, '../data');
+  
   if (!fsSync.existsSync(dataPath)) {
     fsSync.mkdirSync(dataPath, { recursive: true });
     logger.info(`Created data directory: ${dataPath}`);

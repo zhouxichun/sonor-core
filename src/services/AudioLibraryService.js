@@ -354,7 +354,7 @@ class AudioLibraryService extends SonorService {
             }
             imagePath = await this.#writeCoverFileToDisk(albumKey, raw.buffer);
         }
-        // 读取磁盘原图buffer
+
         let image = sharp(imagePath);
         // 如果请求指定缩略尺寸，内存实时缩放
         if (thumbnailWidth && Number.isInteger(thumbnailWidth)) {
@@ -365,7 +365,61 @@ class AudioLibraryService extends SonorService {
             });
         }
         const outBuf = await image.jpeg({quality:85}).toBuffer();
-        return `data:image/jpeg;base64,${outBuf.toString('base64')}`;
+        const theme = await this.#extractThemeColor(outBuf);
+
+        return {
+            base64: `data:image/jpeg;base64,${outBuf.toString('base64')}`,
+            theme: theme
+        };
     }
+
+    async #extractThemeColor(imageBuffer) {
+        try {
+            // 缩小到 1x1 取平均色
+            const { data } = await sharp(imageBuffer)
+                .resize(1, 1)
+                .raw()
+                .toBuffer({ resolveWithObject: true });
+
+            const r = data[0];
+            const g = data[1];
+            const b = data[2];
+
+            const { h, s, l } = this.#rgbToHsl(r, g, b);
+
+            return {
+                h: Math.round(h),
+                s: Math.round(s * 100),
+                l: Math.round(l * 100)
+            };
+        } catch (err) {
+            logger.warn(`PlayService 提取封面主色失败 ${err.message}`);
+            return null;
+        }
+    }
+
+    #rgbToHsl(r, g, b) {
+        r /= 255;
+        g /= 255;
+        b /= 255;
+        const max = Math.max(r, g, b);
+        const min = Math.min(r, g, b);
+        let h, s, l = (max + min) / 2;
+
+        if (max === min) {
+            h = s = 0;
+        } else {
+            const d = max - min;
+            s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+            switch (max) {
+                case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+                case g: h = (b - r) / d + 2; break;
+                case b: h = (r - g) / d + 4; break;
+            }
+            h /= 6;
+        }
+
+        return { h: h * 360, s, l };
+    } 
 }
 module.exports = AudioLibraryService;

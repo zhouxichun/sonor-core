@@ -43,11 +43,8 @@ async function libRoute(fastify, opts) {
     const { uuid } = req.params;
     const { thumbnailWidth } = req.query;
     const opts = {};
-    if(thumbnailWidth) {
-        opts.thumbnailWidth = Number(thumbnailWidth);
-    }
-    const cover = await fastify.audioLibraryService.getCoverByUuid(uuid, opts);
-    return {cover};
+    thumbnailWidth && (opts.thumbnailWidth = Number(thumbnailWidth));
+    return await fastify.audioLibraryService.getCoverByUuid(uuid, opts);
   });
 
   fastify.get('/lib/folders', async () => {
