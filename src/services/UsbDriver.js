@@ -7,22 +7,46 @@ class UsbDriver extends EventEmitter {
         ERROR: 'UsbDriver:error'
     };
     #devices;
-    #options;
     #abortController;
+    #timeoutId = null;
+    #options = {
+        scanInterval: 2000  // 2秒扫描一次
+    }; 
+
     /**
      * @param {object} [options={}]
      */
     constructor(options = {}) {
         super();
         this.#devices = null;
-        this.#options = { ...options };
         this.#abortController = new AbortController();
+        this.#options = {...this.#options, ...options};
         logger.info('UsbDriver instance created');
     }
+    
     async start(){
         logger.info('UsbDriver start()');
-        await this.loadDevices();
+        this.#scheduleNextScan();
     }
+
+    #scheduleNextScan() {
+        if (!this.#abortController) return;
+        this.#timeoutId = setTimeout(() => {
+            this.#scanLoop();
+        }, this.#options.scanInterval);
+    }
+
+    async #scanLoop() {
+        logger.debug('UsbDriver loadDevices begin');
+        try {
+            await this.loadDevices();
+        } catch (err) {
+            this.#emitError('USB扫描异常', err);
+        } finally {
+            this.#scheduleNextScan();
+        }
+    }
+
     /**
      * 订阅USB发现事件
      * @param {Function} callback
@@ -37,8 +61,6 @@ class UsbDriver extends EventEmitter {
      * 加载USB挂载设备列表
      */
     async loadDevices() {
-        logger.debug('UsbDriver loadDevices begin');
-        this.#devices = [];
         const signal = this.#abortController?.signal;
         try {
             const out = await new Promise((res, rej) => {
@@ -51,13 +73,14 @@ class UsbDriver extends EventEmitter {
                 child.on('error', rej);
             });
             const json = JSON.parse(out);
+            const newDevices = [];
             json.blockdevices.forEach(d => {
                 if (d.type === 'disk' && d.children && d.name.startsWith('/dev/sd')) {
                     d.children
                         .filter(c => c.type === 'part')
                         .forEach(mt => {
                             if (mt.mountpoint) {
-                                this.#devices.push({
+                                newDevices.push({
                                     title: mt.mountpoint,
                                     path: mt.mountpoint
                                 });
@@ -65,8 +88,14 @@ class UsbDriver extends EventEmitter {
                         });
                 }
             });
-            logger.info(`UsbDriver detected usb mount points count:${this.#devices.length}, devices:${JSON.stringify(this.#devices)}`);
-            this.emit(UsbDriver.#EVENTS.USB_FOUND, [...this.#devices]);
+            // 对比新旧列表，有变化才触发事件
+            const oldStr = JSON.stringify(this.#devices);
+            const newStr = JSON.stringify(newDevices);
+            if(oldStr !== newStr){
+                this.#devices = newDevices;
+                logger.info(`UsbDriver detected usb mount points count:${this.#devices.length}, devices:${JSON.stringify(this.#devices)}`);
+                this.emit(UsbDriver.#EVENTS.USB_FOUND, [...this.#devices]);
+            }
         } catch (err) {
             this.#emitError('USB设备加载失败', err);
         }
@@ -76,11 +105,17 @@ class UsbDriver extends EventEmitter {
         this.emit(UsbDriver.#EVENTS.ERROR, { message, error: err });
     }
     /**
-     * 销毁实例：终止子进程、清空状态、清除全部事件监听
+     * 销毁实例：清除timeout、终止子进程、清空状态、清除全部事件监听
      * 调用后实例不可复用
      */
     destroy() {
         logger.info('UsbDriver destroy()');
+        // 清除timeout
+        if(this.#timeoutId){
+            clearTimeout(this.#timeoutId);
+            this.#timeoutId = null;
+            logger.debug('UsbDriver scan timeout cleared');
+        }
         if (this.#abortController) {
             this.#abortController.abort();
             logger.debug('UsbDriver abortController aborted');
@@ -88,7 +123,6 @@ class UsbDriver extends EventEmitter {
         }
         this.removeAllListeners();
         this.#devices = null;
-        this.#options = {};
         logger.debug('UsbDriver destroy completed');
     }
 }

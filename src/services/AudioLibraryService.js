@@ -14,7 +14,6 @@ class AudioLibraryService extends SonorService {
     #datafilePath;
     #usbDriver;
     // 内存缓存：albumKey → 本地图片绝对路径
-    #albumCoverCache = new Map();
     #coverCacheDir;
     /**
      * @param {Object} opts
@@ -115,39 +114,6 @@ class AudioLibraryService extends SonorService {
             logger.info(`add new library folder ${folderPath}`);
         }
         this.#saveLibrary();
-        if (!this.#autoScan) {
-            logger.info(`autoScan disabled, skip scan folder ${folderPath}`);
-            return;
-        }
-        if (this.#scannerInstances.has(folderPath)) {
-            logger.info(`scanner already running, skip ${folderPath}`);
-            return;
-        }
-        logger.info(`start scan folder: ${folderPath}`);
-        const existFiles = currentItem.traces.map(t => t.filepath);
-        const scanner = new AudioScanner(folderPath, existFiles);
-        this.#scannerInstances.set(folderPath, scanner);
-        scanner.on('scan:buffer', (items) => {
-            logger.debug(`scanner buffer for folder: ${folderPath}, items: ${items.length}`);
-            const item = this.#findAudioItem(folderPath);
-            if (!item) return;
-            item.traces.push(...items);
-            this.#saveLibrary();
-        });
-        scanner.on('scan:finish', (scanFolder, addedCount) => {
-            const item = this.#findAudioItem(scanFolder);
-            if (item) {
-                item.lastScanAt = Date.now();
-                this.#saveLibrary();
-            }
-            this.#scannerInstances.delete(scanFolder);
-        });
-        scanner.on('scan:error', (scanFolder, err) => {
-            logger.error(`scan folder error:${scanFolder}, ${err}`);
-            this.#scannerInstances.delete(scanFolder);
-            this.#saveLibrary();
-        });
-        await scanner.start();
     }
     async start() {
         logger.info('AudioLibraryService start');
@@ -155,6 +121,53 @@ class AudioLibraryService extends SonorService {
         await this.#usbDriver.start();
         logger.info('AudioLibraryService started');
     }
+
+    async scanFolder(folderPath){
+        if (this.#scannerInstances.has(folderPath)) {
+            logger.info(`scanner already running, skip ${folderPath}`);
+            return false;
+        }
+        let currentItem = this.#findAudioItem(folderPath);
+        if(!currentItem){
+            logger.info(`scanFolder: folder item not found, skip ${folderPath}`);
+            return false;
+        }
+        const existFiles = currentItem.traces.map(track => track.filepath); 
+        console.log(existFiles, existFiles.length);
+        const scanner = new AudioScanner(folderPath, existFiles);
+        this.#scannerInstances.set(folderPath, scanner);
+        logger.debug(`scanFolder: AudioScanner instance created for ${folderPath}`);
+
+        scanner.on('scan:buffer', (items) => {
+            logger.info(`scanner buffer for folder: ${folderPath}, items: ${items.length}`);
+            currentItem.traces.push(...items);
+            this.#saveLibrary();
+        });
+
+        scanner.on('scan:finish', (scanFolder, addedCount) => {
+            const item = this.#findAudioItem(scanFolder);
+            if(item){
+                item.lastScanAt = Date.now();
+            }
+            logger.info(`scan:finish | folder=${scanFolder}, addedCount=${addedCount}`);
+            this.#saveLibrary();
+            this.#scannerInstances.delete(scanFolder);
+        });
+
+        scanner.on('scan:error', (scanFolder, err) => {
+            logger.error(`scan folder error:${scanFolder}, ${err}`);
+            this.#scannerInstances.delete(scanFolder);
+            logger.debug(`scanFolder: scanner instance removed on error ${scanFolder}`);
+        });
+
+        try{
+            await scanner.start();
+            logger.debug(`scanFolder: scanner.start() resolved, folder:${folderPath}`);
+        }catch(err){
+            logger.error(`scanFolder scanner.start() throw exception, folder:${folderPath}, err:${err.message}`);
+        }
+    }
+
     getFolders() {
         return this.#getMountedAudioItems().map(i => i.folder);
     }

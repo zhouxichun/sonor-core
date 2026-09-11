@@ -511,7 +511,10 @@ app.controller('MainCtrl',['$scope','$http','$timeout',function($scope,$http,$ti
             .then(()=>{
                 $scope.showToast(`启动后台扫描: ${folderPath}`);
             })
-            .catch(err => $scope.showToast("扫描启动失败"))
+            .catch(err => {
+                console.log(err);
+                $scope.showToast("扫描启动失败");
+            })
             .finally(done);
         });
     };
