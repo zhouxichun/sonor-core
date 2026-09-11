@@ -159,6 +159,7 @@ app.controller('MainCtrl',['$scope','$http','$timeout',function($scope,$http,$ti
         }
         // 按时间升序
         result.sort((a,b)=>a.time - b.time);
+        result.push({time:'10:00:00',text:'-> End <-'});
         return result;
     }
     // ====================== WebSocket连接与消息处理 ======================
