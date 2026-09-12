@@ -1,0 +1,6 @@
+Option ao: this option does not accept sub-options.
+Sub-options for --vo and --ao were removed from mpv in release 0.23.0.
+See https://0x0.st/uM for details.
+Error parsing option ao (option parameter could not be parsed)
+Setting commandline option --ao=pcm:file=- failed.
+Exiting... (Fatal error)

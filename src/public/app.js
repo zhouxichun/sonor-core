@@ -175,7 +175,6 @@ app.controller('MainCtrl',['$scope','$http','$timeout',function($scope,$http,$ti
         ws.onopen = ()=>{ console.log('ws connected'); };
         ws.onmessage = (event)=>{
             const msg = JSON.parse(event.data);
-            console.log('websocket data', msg);
             switch(msg.type){
                 case 'current_track':{
                     $scope.currentTrack = msg.data;
@@ -557,4 +556,5 @@ app.controller('MainCtrl',['$scope','$http','$timeout',function($scope,$http,$ti
     connectWs();
     $scope.loadPlaylist();
     $scope.switchGroup('artist');
+
 }]);

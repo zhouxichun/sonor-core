@@ -8,6 +8,8 @@ ubuntu 20
 
 node.js 20
 
+mpv 0.36
+
 # Quick Start:
 sudo apt install mpv
 

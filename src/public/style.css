@@ -480,8 +480,8 @@ h4 {
 }
 
 /* ==========底部常驻播放器 player ========== */
-
 .player {
+  position: relative;
   height: var(--player-bar-height);
   width: 100%;
   background: var(--theme-bg);
@@ -492,6 +492,48 @@ h4 {
   flex-direction: row;
   align-items: stretch;
   gap: var(--spacing-lg);
+}
+
+/* 向上投射的灯光：完全在player盒子外面，只渲染上方，不污染player面板 */
+.player::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  /* 定位在播放器上沿的上方，不覆盖player */
+  top: -90px;
+  width:100%;
+  height: 90px;
+  background:
+    radial-gradient(
+      ellipse 60% 120px at 50% 100%,
+      hsla(var(--base-h), 60%, 50%, 0.28) 0%,
+      hsla(var(--base-h), 60%, 50%, 0.14) 40%,
+      transparent 70%
+    ),
+    linear-gradient(
+      to top,
+      hsla(var(--base-h), 60%, 50%, 0.22) 0%,
+      hsla(var(--base-h), 60%, 50%, 0.12) 35%,
+      transparent 70%
+    );
+  pointer-events: none;
+  z-index: -1;
+}
+
+/* 播放器上沿的发光灯带 */
+.player::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -1px;
+  bottom: auto;
+  height:3px;
+  background: var(--theme-highlight);
+  opacity:0.92;
+  box-shadow: 0 0 6px 1px var(--theme-highlight);
+  pointer-events: none;
 }
 
 /* 封面 */

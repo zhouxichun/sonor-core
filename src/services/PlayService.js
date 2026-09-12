@@ -3,8 +3,6 @@ const fs = require('fs').promises;
 const fsSync = require('fs');
 const MpvPlayer = require('./MpvPlayer');
 const path = require('path');
-const musicMetadata = require('music-metadata');
-const sharp = require('sharp');
 const logger = require('../utils/logger')(__dirname);
 class PlayService extends SonorService {
     static EVENTS = {
@@ -14,10 +12,10 @@ class PlayService extends SonorService {
     };
     #destroyed;
     #mpvPlayer;
+    #playerError = false; // 标记mpv进程是否异常
     /** 持久化数据：落地playstate.json */
     #persistData = {
         currentIndex: -1,
-        eq: '',
         volume: 50,
         loop: false,
         random: false,
@@ -41,6 +39,7 @@ class PlayService extends SonorService {
             logger.debug('PlayService mpv onPlay event');
             this.#playing = true;
             this.#paused = false;
+            this.#playerError = false; // 正常播放，清除异常标记
             this.#emitStatus();
         });
         this.#mpvPlayer.onCurrentTimeUpdated((sec) => {
@@ -71,8 +70,12 @@ class PlayService extends SonorService {
             this.#muted = muted;
             this.#emitStatus();
         });
+        
         this.#mpvPlayer.onError((err) => {
-            logger.error(`PlayService mpv error event ${err.message}`);
+            logger.error(`PlayService mpv error event ${err}`);
+            this.#playerError = true; // mpv异常，打上标记
+            this.#playing = false;
+            this.#paused = false;
             this.#emitStatus();
         });
         
@@ -88,22 +91,20 @@ class PlayService extends SonorService {
     getStatus() {
         return {
             currentIndex: this.#persistData.currentIndex,
-            eq: this.#persistData.eq,
             volume: this.#persistData.volume,
             loop: this.#persistData.loop,
             random: this.#persistData.random,
             paused: this.#paused,
             playing: this.#playing,
-            muted: this.#muted
+            muted: this.#muted,
+            playerError: this.#playerError // 对外输出异常状态
         };
     }
     async start() {
         logger.info('PlayService start()');
         await this.#loadState();
-        this.#mpvPlayer.init();
-        this.#mpvPlayer.setVolume(this.#persistData.volume);
-        this.#mpvPlayer.setEQ(this.#persistData.eq);
-        this.#mpvPlayer.setLoop(this.#persistData.loop);
+        this.#playerError = false; // 启动时重置异常标记
+        this.#mpvPlayer.init(this.#persistData.volume, this.#persistData.loop);
         logger.info(`PlayService loaded persisted state.`);
         this.#emitStatus();
     }
@@ -349,19 +350,6 @@ class PlayService extends SonorService {
         }
         logger.debug('PlayService toggleMute call mpv');
         this.#mpvPlayer.toggleMute();
-        return true;
-    }
-    /**
-     * 设置均衡器参数
-     * @param {string} eqStr
-     * @returns {Promise<boolean>}
-     */
-    async setEQ(eqStr) {
-        logger.info(`PlayService setEQ ${eqStr}`);
-        this.#persistData.eq = eqStr ?? '';
-        this.#mpvPlayer.setEQ(this.#persistData.eq);
-        await this.#saveState();
-        this.#emitStatus();
         return true;
     }
     /**
