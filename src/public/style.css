@@ -139,14 +139,32 @@ h4 {
 /* ==========顶部标题栏 top-bar ========== */
 .top-bar {
   z-index: 100;
+  position: relative; /* 关键，不能少 */
   display: flex;
   justify-content: space-between;
   align-items: center;
   padding: var(--spacing-xl);
   background: var(--bg-panel);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
-  border-bottom: 1px solid var(--border-dark);
 }
+
+.top-bar::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 5px;
+  background: linear-gradient(
+    to top,
+    hsla(var(--base-h), 60%, 50%, 0.38) 0%,
+    hsla(var(--base-h), 60%, 50%, 0.15) 40%,
+    transparent 100%
+  );
+  pointer-events: none;
+  z-index: 2;
+}
+
 .bar-left .app-title {
   margin: 0;
   font-size: var(--font-xxl);
@@ -154,6 +172,7 @@ h4 {
   font-weight: 600;
   letter-spacing: 1px;
 }
+
 .bar-right {
   display: flex;
   gap: var(--spacing-md);
@@ -634,7 +653,7 @@ h4 {
   background-color: var(--theme-bg-btn);
   width: var(--btn-player-size);
   height: var(--btn-player-size);
-  font-size: var(--font-lg);
+  font-size: var(--font-md);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -676,20 +695,50 @@ h4 {
 }
 
 /* ==========Toast全局提示 ========== */
-.toast-notice {
-  position: fixed;
-  top: var(--spacing-lg);
-  left: 50%;
-  transform: translateX(-50%);
-  background: var(--bg-hover);
-  color: var(--text-main);
-  padding: var(--spacing-md);
-  border-radius: var(--radius-sm);
-  font-size: var(--font-md);
-  z-index: 9999;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
-  min-width: 200px;
-  text-align: center;
+.toast-container {
+    position: fixed;
+    left: 50%;
+    top: 20px;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column; /* 新消息往下排 */
+    gap: 8px;
+    z-index: 9999;
+}
+.toast-item {
+    padding: 10px 16px;
+    border-radius: 6px;
+    color: #fff;
+    min-width: 220px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.15);
+    transition: opacity 0.6s, transform 0.6s;
+    animation: toastIn 0.6s ease forwards;
+}
+.toast-item.info {
+    background: var(--theme-primary);
+}
+.toast-item.success {
+    background: var(--theme-highlight);
+}
+.toast-item.warn {
+    background: #e6a23c;
+}
+.toast-item.error {
+    background: #f56c6c;
+}
+.toast-item.leaving {
+    opacity: 0;
+    transform: translateY(-20px);
+}
+@keyframes toastIn {
+    from {
+        opacity: 0;
+        transform: translateY(-20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
 /* ==========Loading全局遮罩 ========== */
@@ -735,6 +784,54 @@ h4 {
   inset: 0;
   z-index: 98;
 }
+
+#wsMask {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.82);
+    z-index: 9999;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    font-family: sans-serif;
+}
+.mask-inner {
+    text-align: center;
+    color: #fff;
+    padding: 32px 48px;
+    background: #1c1c1f;
+    border-radius: 14px;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.55);
+}
+.mask-icon {
+    font-size: 48px;
+    color: #ffb74d;
+    margin-bottom: 16px;
+}
+.mask-inner h2 {
+    margin:0 0 10px;
+    font-size:22px;
+    font-weight:500;
+}
+.mask-inner p {
+    margin:0;
+    font-size:16px;
+    color:#ccc;
+}
+/* 动态点动画 ... → ... */
+.dot-anim {
+    display:inline-block;
+    animation: dot 1.4s infinite steps(4);
+    width:20px;
+    text-align:left;
+}
+@keyframes dot {
+    0% { content:''; }
+    25% { content:'.'; }
+    50% { content:'..'; }
+    75% { content:'...'; }
+}
+
 
 /* =========响应式小屏========== */
 @media (max-width: 960px) {

@@ -7,7 +7,7 @@ const fsSync = require('fs');
 const path = require('path');
 const fastifyStatic = require('@fastify/static');
 const config = require('./config');
-const logger = require('./utils/logger')(__dirname);
+const logger = require('./utils/logger')('app');
 const SystemService = require('./services/SystemService');
 
 let shuttingDown = false;
@@ -30,8 +30,8 @@ async function createApp() {
   // 挂载到fastify全局
   fastify.decorate('audioLibraryService', new AudioLibraryService({ dataPath }));
   fastify.decorate('playService', new PlayService({ dataPath }));
-  fastify.decorate('wsClients', new Set());
   fastify.decorate('systemService', new SystemService({ dataPath }));
+  fastify.decorate('wsClients', new Set());
 
   // 注册跨域插件，允许前端浏览器跨域访问API
   logger.info('fastify registering plugin: @fastify/cors');
@@ -58,14 +58,8 @@ async function createApp() {
   fastify.addHook('onReady', async () => {
     logger.info('fastify onReady hook, starting business services');
     try {
-        logger.info('Starting AudioLibraryService...');
         await fastify.audioLibraryService.start();
-        logger.info('AudioLibraryService started successfully');
-        
-        logger.info('Starting PlayService...');
         await fastify.playService.start();
-        logger.info('PlayService started successfully');
-        
         logger.info('All Service started');
     } catch (err) {
         logger.error('Error starting services in onReady hook:', err);

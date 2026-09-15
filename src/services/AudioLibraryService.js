@@ -1,49 +1,71 @@
 const fs = require('fs').promises;
 const fsSync = require('fs');
 const path = require('path');
-const logger = require('../utils/logger')(__dirname);
+const logger = require('../utils/logger')('AudioLibraryService');
 const AudioScanner = require('./AudioScanner');
 const UsbDriver = require('./UsbDriver');
 const SonorService = require('./SonorService');
 const musicMetadata = require('music-metadata');
 const sharp = require('sharp');
 class AudioLibraryService extends SonorService {
+    static EVENTS = {
+        GROUP_STATS: 'audiolibService:group_statS',
+        USB_FOUND:'audiolibService:usb_fount',
+        COVER_READY: 'audiolibService:usb_fount'
+    };
+
     #audios;
     #scannerInstances;
-    #autoScan;
     #datafilePath;
     #usbDriver;
+    #groupStats;
     // 内存缓存：albumKey → 本地图片绝对路径
     #coverCacheDir;
+    // 内存缓存：key=albumKey，存已经处理好的封面结果
+    #coverMemCache;
+    // 正在处理中的任务锁：防止并发重复解析，key=albumKey
+    #coverPendingTasks; 
+
     /**
      * @param {Object} opts
-     * @param {boolean} [opts.autoScanUsb=true] 是否自动扫描发现的U盘
      * @param {string} opts.dataPath 持久化数据目录，输出 audio_library.json
      */
     constructor(opts = {}) {
         super(opts);
         this.#audios = [];
         this.#scannerInstances = new Map();
+        this.#coverMemCache = new Map();
+        this.#coverPendingTasks = new Map();
+
 
         this.#datafilePath = path.join(this.dataPath, 'audio_library.json');
         this.#coverCacheDir = path.join(this.dataPath, 'cover_cache');
         if (!fsSync.existsSync(this.#coverCacheDir)) {
             fsSync.mkdirSync(this.#coverCacheDir, { recursive: true });
-            logger.info(`created cover cache dir. dir=${this.#coverCacheDir}`);
+            logger.info('created cover cache dir', this.#coverCacheDir);
         }
-        this.#autoScan = opts.autoScanUsb ?? true;
         this.#usbDriver = new UsbDriver();
         this.#usbDriver.onUsbFound(async (devices) => {
             for (const device of devices) {
                 try {
                     await this.#addFolder(device.path);
-                } catch (err) {
-                    logger.warn(`addFolder error ${err.message}`);
-                }
+                } catch (err) { logger.warn('addFolder error', err); }
             }
+            this.emit(AudioLibraryService.EVENTS.USB_FOUND, this.getFolders());
+            this.#DoGroupStats();
         });
-        logger.info(`AudioLibraryService instance created.`);
+        logger.info('instance created');
     }
+
+    onUsbFound(callback){ return this.on(AudioLibraryService.EVENTS.USB_FOUND, callback); }
+    offUsbFound(callback){ return this.off(AudioLibraryService.EVENTS.USB_FOUND, callback); }
+
+    onGroupStatsUpdate(callback){ return this.on(AudioLibraryService.EVENTS.GROUP_STATS, callback); }
+    offGroupStatsUpdate(callback){ return this.off(AudioLibraryService.EVENTS.GROUP_STATS, callback); }
+
+    onCoverReady(callback){ return this.on(AudioLibraryService.EVENTS.COVER_READY, callback); }
+    offCoverReady(callback){ return this.off(AudioLibraryService.EVENTS.COVER_READY, callback); }
+
     #loadFromStore() {
         this.#audios = [];
         if (!fsSync.existsSync(this.#datafilePath)) {
@@ -57,19 +79,18 @@ class AudioLibraryService extends SonorService {
                 ...item,
                 status: 'unmounted'
             }));
-            logger.info(`AudioLibrary loaded from store, folder count=${this.#audios.length}`);
+            logger.info(`loaded data from file, folder count=${this.#audios.length}`);
         } catch (e) {
-            logger.warn(`AudioLibrary load failed, reset library ${e.message}`);
-            this.#audios = [];
+            logger.warn('data load failed', e);
         }
     }
     #saveLibrary() {
         try {
             const dump = this.#audios.map(({ status, ...rest }) => rest);
             fsSync.writeFileSync(this.#datafilePath, JSON.stringify(dump, null, 2));
-            logger.debug('library persisted to file');
+            logger.debug('data save to file');
         } catch (err) {
-            logger.error(`AudioLibrary save error ${err}`);
+            logger.error('data save error', err);
         }
     }
     #findAudioItem(folderPath) {
@@ -92,7 +113,7 @@ class AudioLibraryService extends SonorService {
         try {
             stat = await fs.stat(folderPath);
         } catch (e) {
-            logger.warn(`addFolder stat fail, skip ${folderPath} ${e.message}`);
+            logger.warn(`addFolder stat fail, skip ${folderPath}`, e);
             return;
         }
         if (!stat.isDirectory()) {
@@ -116,10 +137,9 @@ class AudioLibraryService extends SonorService {
         this.#saveLibrary();
     }
     async start() {
-        logger.info('AudioLibraryService start');
+        logger.info('start');
         this.#loadFromStore();
         await this.#usbDriver.start();
-        logger.info('AudioLibraryService started');
     }
 
     async scanFolder(folderPath){
@@ -133,15 +153,15 @@ class AudioLibraryService extends SonorService {
             return false;
         }
         const existFiles = currentItem.traces.map(track => track.filepath); 
-        console.log(existFiles, existFiles.length);
         const scanner = new AudioScanner(folderPath, existFiles);
         this.#scannerInstances.set(folderPath, scanner);
-        logger.debug(`scanFolder: AudioScanner instance created for ${folderPath}`);
+        logger.debug(`AudioScanner instance created for ${folderPath}`);
 
         scanner.on('scan:buffer', (items) => {
             logger.info(`scanner buffer for folder: ${folderPath}, items: ${items.length}`);
             currentItem.traces.push(...items);
             this.#saveLibrary();
+            this.#DoGroupStats();
         });
 
         scanner.on('scan:finish', (scanFolder, addedCount) => {
@@ -149,49 +169,42 @@ class AudioLibraryService extends SonorService {
             if(item){
                 item.lastScanAt = Date.now();
             }
-            logger.info(`scan:finish | folder=${scanFolder}, addedCount=${addedCount}`);
+            logger.info(`scan finish | folder=${scanFolder}, addedCount=${addedCount}`);
             this.#saveLibrary();
+            this.#DoGroupStats();
             this.#scannerInstances.delete(scanFolder);
         });
 
         scanner.on('scan:error', (scanFolder, err) => {
-            logger.error(`scan folder error:${scanFolder}, ${err}`);
+            logger.error('scan folder error', scanFolder, err);
             this.#scannerInstances.delete(scanFolder);
-            logger.debug(`scanFolder: scanner instance removed on error ${scanFolder}`);
         });
 
         try{
             await scanner.start();
-            logger.debug(`scanFolder: scanner.start() resolved, folder:${folderPath}`);
+            logger.debug('scaning folder', folderPath);
         }catch(err){
-            logger.error(`scanFolder scanner.start() throw exception, folder:${folderPath}, err:${err.message}`);
+            logger.debug('scaning folder error', folderPath, err);
         }
     }
 
-    getFolders() {
-        return this.#getMountedAudioItems().map(i => i.folder);
-    }
-    getAllTracks() {
-        return this.#flattenTrackList();
-    }
+    getFolders() { return this.#getMountedAudioItems().map(i => i.folder); }
     filterTracks(filterObj = {}) {
         let list = this.#flattenTrackList();
         const { artist, album, genre, keyword } = filterObj;
         if (artist) {
             const kw = artist.trim().toLowerCase();
-            return list.filter(t => (t.artist || '').toLowerCase().includes(kw));
+            list = list.filter(t => (t.artist || '').toLowerCase().includes(kw));
         }
-        
         if (album) {
             const kw = album.trim().toLowerCase();
-            return list.filter(t => (t.album || '').toLowerCase().includes(kw));
+            list = list.filter(t => (t.album || '').toLowerCase().includes(kw));
         }
-        
         if (genre) {
             const targetGenre = genre.trim().toLowerCase();
-            return list.filter(t => {
+            list = list.filter(t => {
                 const trackGenres = (t.genre || '')
-                    .split(',')
+                    .split(/[,，]/)
                     .map(g => g.trim().toLowerCase())
                     .filter(Boolean);
                 return trackGenres.includes(targetGenre);
@@ -199,84 +212,32 @@ class AudioLibraryService extends SonorService {
         }
         if (keyword) {
             const kw = keyword.trim().toLowerCase();
-            return list.filter(t =>
+            list = list.filter(t =>
                 `${t.filename || ''} ${t.title || ''} ${t.artist || ''} ${t.album || ''}`.toLowerCase().includes(kw)
             );
         }
-        return null;
+
+        // 只提取需要字段：uuid, title, artist, album, genre
+        return list.map(t => ({
+            uuid: t.uuid,
+            title: t.title,
+            artist: t.artist,
+            album: t.album,
+            genre: t.genre
+        }));
     }
-    getTrackByUuid(uuid) {
-        return this.#flattenTrackList().find(t => t.uuid === uuid) ?? null;
-    }
-    removeTrackByUuid(uuid) {
-        for (const item of this.#getMountedAudioItems()) {
-            const idx = item.traces.findIndex(t => t.uuid === uuid);
-            if (idx !== -1) {
-                item.traces.splice(idx, 1);
-                this.#saveLibrary();
-                logger.info(`remove track by uuid success ${uuid}`);
-                return true;
-            }
-        }
-        logger.warn(`remove track by uuid not found ${uuid}`);
-        return false;
-    }
-    /**
-     * 获取不重复艺术家列表，附带曲目计数
-     * @returns Array<{name:string, count:number}>
-     */
-    getDistinctArtists() {
-        const tracks = this.#flattenTrackList();
-        const map = new Map();
-        for (const t of tracks) {
-            const name = (t.artist || '未知艺术家').trim();
-            map.set(name, (map.get(name) || 0) + 1);
-        }
-        return Array.from(map.entries()).map(([name, count]) => ({ name, count }));
-    }
-    /**
-     * 获取不重复专辑列表，附带曲目计数
-     * @returns Array<{name:string, count:number}>
-     */
-    getDistinctAlbums() {
-        const tracks = this.#flattenTrackList();
-        const map = new Map();
-        for (const t of tracks) {
-            const name = (t.album || '未知专辑').trim();
-            map.set(name, (map.get(name) || 0) + 1);
-        }
-        return Array.from(map.entries()).map(([name, count]) => ({ name, count }));
-    }
-    /**
-     * 获取不重复流派列表，附带曲目计数
-     * 注意：genre 字段为逗号分隔的多值，需拆分后分别计数
-     * @returns Array<{name:string, count:number}>
-     */
-    getDistinctGenres() {
-        const tracks = this.#flattenTrackList();
-        const map = new Map();
-        for (const t of tracks) {
-            // 拆分成多个流派，兼容中英文逗号
-            const raw = t.genre || '';
-            const genres = raw.split(/[,，]/).map(s => s.trim()).filter(Boolean);
-            // 一个流派都没有才兜底为"未知流派"
-            const list = genres.length > 0 ? genres : ['未知流派'];
-            for (const g of list) {
-                map.set(g, (map.get(g) || 0) + 1);
-            }
-        }
-        return Array.from(map.entries()).map(([name, count]) => ({ name, count }));
-    }
-    
+
+    getTrackByUuid(uuid) { return this.#flattenTrackList().find(t => t.uuid === uuid) ?? null; }
+    getGroupStats(){ return this.#groupStats; }
     async destroy() {
-        logger.info('AudioLibraryService destroy begin');
+        logger.info('destroy begin');
         await super.destroy();
         for (const scanner of this.#scannerInstances.values()) {
             scanner.stop();
         }
         this.#scannerInstances.clear();
         await this.#usbDriver.destroy();
-        logger.info('AudioLibraryService destroy done');
+        logger.info('destroy done');
     }
     /**
      * 根据专辑key生成缓存文件名md5
@@ -310,7 +271,7 @@ class AudioLibraryService extends SonorService {
         const baseName = this.#getCoverFilename(albumKey);
         const fullPath = path.join(this.#coverCacheDir, `${baseName}.jpg`);
         await fs.writeFile(fullPath, imageBuf);
-        logger.debug(`write cover cache ${fullPath}`);
+        logger.debug('write cover to file', fullPath);
         return fullPath;
     }
     /**
@@ -326,7 +287,7 @@ class AudioLibraryService extends SonorService {
             });
             const pictureList = meta.common?.picture;
             if (!pictureList || pictureList.length === 0) {
-                logger.debug(`no embedded cover ${filepath}`);
+                logger.debug('no embedded cover', filepath);
                 return null;
             }
             const pic = pictureList[0];
@@ -334,7 +295,7 @@ class AudioLibraryService extends SonorService {
             const buffer = await sharp(pic.data).jpeg({quality:90}).toBuffer();
             return { buffer: buffer };
         } catch (err) {
-            logger.warn(`读取音频封面失败 ${filepath} ${err.message}`);
+            logger.warn('read embedded cover failed', filepath, err);
             return null;
         }
     }
@@ -344,46 +305,83 @@ class AudioLibraryService extends SonorService {
      * @param {{thumbnailWidth?:number}} opts
      * @returns {Promise<string|null>} dataUrl base64
      */
-    async getCoverByUuid(uuid, opts = {}) {
+    async readyCover(uuid) {
         let foundTrack = null;
         for(const folderItem of this.#audios) {
             foundTrack = folderItem.traces?.find(t => t.uuid === uuid);
             if(foundTrack) break;
         }
         if (!foundTrack || !foundTrack.filepath) {
-            logger.debug(`getCoverByUuid track not found ${uuid}`);
+            logger.debug('try to read cover but track not found', uuid);
             return null;
         }
-        const { thumbnailWidth } = opts;
-        // albumKey 仅 artist||album，不携带尺寸
+        const thumbnailWidth  = 600;
         const albumKey = `${foundTrack.artist || ''}||${foundTrack.album || ''}`;
-        let imagePath = await this.#findCoverFileInDisk(albumKey);
-        // 磁盘没有原图，解析音频写入磁盘
-        if (!imagePath) {
-            logger.debug(`cover cache miss, extract from audio ${uuid}`);
-            const raw = await this.#readCoverBuffer(foundTrack.filepath);
-            if (!raw) {
-                return null;
-            }
-            imagePath = await this.#writeCoverFileToDisk(albumKey, raw.buffer);
-        }
 
-        let image = sharp(imagePath);
-        // 如果请求指定缩略尺寸，内存实时缩放
-        if (thumbnailWidth && Number.isInteger(thumbnailWidth)) {
-            image = image.resize({
-                width: thumbnailWidth,
-                height: thumbnailWidth,
-                fit: 'inside'
+        // 1. 内存命中缓存，直接emit，几乎0延迟
+        if(this.#coverMemCache.has(albumKey)){
+            const cached = this.#coverMemCache.get(albumKey);
+            this.emit(AudioLibraryService.EVENTS.COVER_READY, {
+                uuid,
+                base64: cached.base64,
+                theme: cached.theme
             });
+            return;
         }
-        const outBuf = await image.jpeg({quality:85}).toBuffer();
-        const theme = await this.#extractThemeColor(outBuf);
 
-        return {
-            base64: `data:image/jpeg;base64,${outBuf.toString('base64')}`,
-            theme: theme
-        };
+        // 2. 如果当前专辑正在解析，直接等待同一个Promise，不重复执行
+        if(this.#coverPendingTasks.has(albumKey)){
+            const pending = await this.#coverPendingTasks.get(albumKey);
+            this.emit(AudioLibraryService.EVENTS.COVER_READY, {
+                uuid,
+                base64: pending.base64,
+                theme: pending.theme
+            });
+            return;
+        }
+
+        // 3. 创建任务Promise，存入pending锁，防止并发重复解析
+        const taskPromise = (async () => {
+            let imagePath = await this.#findCoverFileInDisk(albumKey);
+            if (!imagePath) {
+                const raw = await this.#readCoverBuffer(foundTrack.filepath);
+                if (!raw) {
+                    return null;
+                }
+                imagePath = this.#writeCoverFileToDisk(albumKey, raw.buffer);
+            }
+            let image = sharp(imagePath)
+                .resize({
+                    width: thumbnailWidth,
+                    height: thumbnailWidth,
+                    fit: 'inside'
+                });
+            const outBuf = await image.jpeg({quality:85}).toBuffer();
+            const theme = await this.#extractThemeColor(outBuf);
+            const result = {
+                base64: `data:image/jpeg;base64,${outBuf.toString('base64')}`,
+                theme: theme
+            };
+            // 存入内存缓存
+            this.#coverMemCache.set(albumKey, result);
+            return result;
+        })();
+        this.#coverPendingTasks.set(albumKey, taskPromise);
+
+        try {
+            const res = await taskPromise;
+            if(!res) return null;
+            this.emit(AudioLibraryService.EVENTS.COVER_READY, {
+                uuid,
+                base64: res.base64,
+                theme: res.theme
+            });
+        } catch(err){
+            logger.error('ready cover failed', err);
+        } finally {
+            // 解析完成/失败，清除pending锁
+            this.#coverPendingTasks.delete(albumKey);
+        }
     }
 
     async #extractThemeColor(imageBuffer) {
@@ -406,7 +404,7 @@ class AudioLibraryService extends SonorService {
                 l: Math.round(l * 100)
             };
         } catch (err) {
-            logger.warn(`PlayService 提取封面主色失败 ${err.message}`);
+            logger.warn('get theme color from cover failed', err);
             return null;
         }
     }
@@ -434,5 +432,47 @@ class AudioLibraryService extends SonorService {
 
         return { h: h * 360, s, l };
     } 
+
+    /**
+     * 一次性获取艺术家、专辑、流派分组统计
+     * @returns {{
+     *   artists: Array<{name:string, count:number}>,
+     *   albums: Array<{name:string, count:number}>,
+     *   genres: Array<{name:string, count:number}>
+     * }}
+     */
+    #DoGroupStats() {
+        const tracks = this.#flattenTrackList();
+        const artistMap = new Map();
+        const albumMap = new Map();
+        const genreMap = new Map();
+
+        for (const t of tracks) {
+            // artist
+            const artistName = (t.artist || '未知艺术家').trim();
+            artistMap.set(artistName, (artistMap.get(artistName) || 0) + 1);
+
+            // album
+            const albumName = (t.album || '未知专辑').trim();
+            albumMap.set(albumName, (albumMap.get(albumName) || 0) + 1);
+
+            // genre 多值拆分
+            const rawGenre = t.genre || '';
+            const genres = rawGenre.split(/[,，]/).map(s => s.trim()).filter(Boolean);
+            const genreList = genres.length > 0 ? genres : ['未知流派'];
+            for (const g of genreList) {
+            genreMap.set(g, (genreMap.get(g) || 0) + 1);
+            }
+        }
+
+        this.#groupStats = {
+            artists: Array.from(artistMap.entries()).map(([name, count]) => ({ name, count })),
+            albums: Array.from(albumMap.entries()).map(([name, count]) => ({ name, count })),
+            genres: Array.from(genreMap.entries()).map(([name, count]) => ({ name, count }))
+        };
+
+        this.emit(AudioLibraryService.EVENTS.GROUP_STATS, this.#groupStats);
+    }
+
 }
 module.exports = AudioLibraryService;

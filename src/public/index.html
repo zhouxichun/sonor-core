@@ -80,8 +80,8 @@
                 <div ng-if="playlistTracks.length === 0" class="playlist-empty-tip">播放列表为空</div>
                 <div ng-repeat="track in playlistTracks"
                     class="playlist-item"
-                    ng-class="{'active': $index === currentIndex}"
-                    id="playlist-item-{{$index}}">
+                    ng-class="{'active': track.uuid === currentTrack.uuid}"
+                    id="pl-{{track.uuid}}">
                     <div class="playlist-item-row1">
                         <span class="playlist-item-title">{{track.title}}</span>
                         <!-- 三点下拉菜单 -->
@@ -89,7 +89,7 @@
                             <button class="playlist-item-btn" ng-click="toggleDropdown(track.uuid)" type="button">⋯</button>
                             <div class="dropdown-menu" ng-if="openDropdownUuid === track.uuid">
                                 <div class="dropdown-item" ng-click="playTrack(track.uuid);">播放</div>
-                                <div class="dropdown-item" ng-click="removeFromPlaylist(track.uuid);">移除</div>
+                                <div class="dropdown-item" debounce-click="removeFromPlaylist(track.uuid);">移除</div>
                             </div>
                         </div>
                     </div>
@@ -97,7 +97,6 @@
                         <span>{{track.album||'未知专辑'}}</span>
                         <span>{{track.artist||'未知歌手'}}</span>
                         <span>{{track.genre||'无流派'}}</span>
-                        <span>{{ getLosslessLabel(track) }}</span>
                     </div>
                 </div>
             </div>
@@ -111,9 +110,9 @@
                     ng-keyup="$event.keyCode === 13 && doSearch()">
                 <div class="group-tabs-wrap">
                     <div class="group-tabs">
-                        <button ng-class="{active:activeGroup==='artist'}" ng-click="switchGroup('artist')">歌手</button>
-                        <button ng-class="{active:activeGroup==='album'}" ng-click="switchGroup('album')">专辑</button>
-                        <button ng-class="{active:activeGroup==='genre'}" ng-click="switchGroup('genre')">流派</button>
+                        <button ng-class="{active:activeGroup==='artists'}" ng-click="switchGroup('artists')">歌手</button>
+                        <button ng-class="{active:activeGroup==='albums'}" ng-click="switchGroup('albums')">专辑</button>
+                        <button ng-class="{active:activeGroup==='genres'}" ng-click="switchGroup('genres')">流派</button>
                     </div>
                     <div class="filter-info">
                         <span ng-if="libFilter.keyword">过滤: 关键词={{libFilter.keyword}}</span>
@@ -126,7 +125,7 @@
                 <!-- header: 分组名称列表 -->
                 <div ng-if="!libFilter.keyword && !selectedGroupName">
                     <div class="group-card-wrap">
-                        <div class="group-card" ng-repeat="item in groupList" ng-click="openGroupItem(item)">
+                        <div class="group-card" ng-repeat="item in groupList" debounce-click="openGroupItem(item)">
                             <div class="group-card-name">{{item.name}}</div>
                             <div class="group-card-count">{{item.count}}首</div>
                         </div>
@@ -149,7 +148,6 @@
                             <span>{{track.album||'未知专辑'}}</span>
                             <span>{{track.artist||'未知歌手'}}</span>
                             <span>{{track.genre||'无流派'}}</span>
-                            <span>{{ getLosslessLabel(track) }}</span>
                         </div>
                     </div>
                 </div>
@@ -162,7 +160,7 @@
                 <div class="setup-body">
                     <div class="setup-folder-item" ng-repeat="folder in folderList">
                         <span class="setup-folder-path">{{folder}}</span>
-                        <button class="btn-icon-add" ng-click="scanFolder(folder)" title="扫描此目录">
+                        <button class="btn-icon-add" debounce-click="scanFolder(folder)" title="扫描此目录">
                             <i class="fa fa-refresh"></i>
                         </button>
                     </div>
@@ -171,7 +169,7 @@
             <div class="setup-item-wrap">
                 <h3 class="setup-title">音量</h3>
                 <div class="setup-body">
-                    <input type="range" min="0" max="100" ng-model="volume" ng-change="setVolume(volume)">
+                    <input type="range" min="0" max="100" ng-model="playerStatus.volume" ng-change="setVolume()">
                 </div>
             </div>
             <div class="setup-item-wrap">
@@ -214,25 +212,32 @@
             </div>
             <div class="player-controls">
                 <button class="player-btn" ng-click="playPrev()"><i class="fa fa-step-backward"></i></button>
-                <button class="player-btn" ng-click="playPause()">
-                    <i ng-if="!isPlaying || isPaused" class="fa fa-play"></i>
-                    <i ng-if="isPlaying && !isPaused" class="fa fa-pause"></i>
+                <button class="player-btn" debounce-click="playPause()">
+                    <i ng-if="!playerStatus.playing || playerStatus.paused" class="fa fa-play"></i>
+                    <i ng-if="playerStatus.playing && !playerStatus.paused" class="fa fa-pause"></i>
                 </button>
-                <button class="player-btn" ng-click="playerStop()" ng-disabled="!isPlaying"><i class="fa fa-stop"></i></button>
+                <button class="player-btn" ng-click="playerStop()" ng-disabled="!playerStatus.playing"><i class="fa fa-stop"></i></button>
                 <button class="player-btn" ng-click="playNext()"><i class="fa fa-step-forward"></i></button>
-                <button class="player-btn" ng-click="toggleLoop()" ng-class="{'active':loopMode}"><i class="fa fa-repeat"></i></button>
-                <button class="player-btn" ng-click="toggleRandom()" ng-class="{'active':randomMode}" title="随机播放">
-                    <i class="fa fa-random"></i>
+                <button class="player-btn" ng-click="toggleLoop()" ng-class="{'active':playerStatus.loop}"><i class="fa fa-repeat"></i></button>
+                <button class="player-btn" ng-click="toggleRandom()" title="随机播放">
+                    <i class="fa" ng-class="playerStatus.random ? 'fa-random' : 'fa-arrow-down'"></i>
                 </button>
-                <button class="player-btn" ng-click="toggleMute()" ng-class="{'active':isMuted}" title="静音">
-                    <i class="fa" ng-class="isMuted ? 'fa-volume-off' : 'fa-volume-up'"></i>
+                <button class="player-btn" ng-click="toggleMute()" title="静音">
+                    <i class="fa" ng-class="playerStatus.muted ? 'fa-volume-off' : 'fa-volume-up'"></i>
                 </button>
             </div>
         </div>
         
     </div>
-    <!-- 全局toast提示 -->
-    <div class="toast-notice" ng-if="toastMessage">{{toastMessage}}</div>
+    <!-- Toast容器，固定在右下角，消息向上堆叠 -->
+    <div class="toast-container">
+        <div 
+            class="toast-item" 
+            ng-repeat="item in toastList track by item.id" 
+            ng-class="[item.level, {leaving: item.leaving}]">
+            {{item.message}}
+        </div>
+    </div>
     <!-- 封面大图弹窗 -->
     <div class="cover-popup-mask" ng-if="showCoverPopup" ng-click="closeCoverPopup()">
         <div class="cover-popup-inner" ng-click="$event.stopPropagation()">
@@ -245,6 +250,17 @@
     <div class="global-loading-mask" ng-if="loading">
         <div class="loading-spinner"><i class="fa fa-spinner fa-spin fa-2x"></i></div>
     </div>
-<script src="./app.js"></script>
+    <div id="wsMask">
+        <div class="mask-inner">
+            <div class="mask-icon">
+                <i class="fa fa-exclamation-triangle"></i>
+            </div>
+            <h2>服务端连接断开</h2>
+            <p>正在尝试重连<span class="dot-anim">...</span></p>
+        </div>
+    </div>
+    <script src="wsService.js"></script>
+    <script src="app.js"></script>
+
 </body>
 </html>

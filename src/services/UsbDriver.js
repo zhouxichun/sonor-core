@@ -1,6 +1,7 @@
 const EventEmitter = require('events');
 const { execFile } = require('child_process');
-const logger = require('../utils/logger')(__dirname);
+const logger = require('../utils/logger')('UsbDriver');
+
 class UsbDriver extends EventEmitter {
     static #EVENTS = {
         USB_FOUND: 'UsbDriver:usb_found',
@@ -21,11 +22,11 @@ class UsbDriver extends EventEmitter {
         this.#devices = null;
         this.#abortController = new AbortController();
         this.#options = {...this.#options, ...options};
-        logger.info('UsbDriver instance created');
+        logger.info('instance created');
     }
     
     async start(){
-        logger.info('UsbDriver start()');
+        logger.info('start');
         this.#scheduleNextScan();
     }
 
@@ -37,7 +38,6 @@ class UsbDriver extends EventEmitter {
     }
 
     async #scanLoop() {
-        logger.debug('UsbDriver loadDevices begin');
         try {
             await this.loadDevices();
         } catch (err) {
@@ -93,7 +93,7 @@ class UsbDriver extends EventEmitter {
             const newStr = JSON.stringify(newDevices);
             if(oldStr !== newStr){
                 this.#devices = newDevices;
-                logger.info(`UsbDriver detected usb mount points count:${this.#devices.length}, devices:${JSON.stringify(this.#devices)}`);
+                logger.info('usb mount points detected', this.#devices.length, this.#devices);
                 this.emit(UsbDriver.#EVENTS.USB_FOUND, [...this.#devices]);
             }
         } catch (err) {
@@ -101,7 +101,7 @@ class UsbDriver extends EventEmitter {
         }
     }
     #emitError(message, err) {
-        logger.error(`${message}: ${err.message}`);
+        logger.error(message, err);
         this.emit(UsbDriver.#EVENTS.ERROR, { message, error: err });
     }
     /**
@@ -109,21 +109,21 @@ class UsbDriver extends EventEmitter {
      * 调用后实例不可复用
      */
     destroy() {
-        logger.info('UsbDriver destroy()');
+        logger.info('destroy');
         // 清除timeout
         if(this.#timeoutId){
             clearTimeout(this.#timeoutId);
             this.#timeoutId = null;
-            logger.debug('UsbDriver scan timeout cleared');
+            logger.debug('scan timer cleared');
         }
         if (this.#abortController) {
             this.#abortController.abort();
-            logger.debug('UsbDriver abortController aborted');
+            logger.debug('abortController aborted');
             this.#abortController = null;
         }
         this.removeAllListeners();
         this.#devices = null;
-        logger.debug('UsbDriver destroy completed');
+        logger.debug('destroy completed');
     }
 }
 module.exports = UsbDriver;

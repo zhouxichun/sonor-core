@@ -9,6 +9,9 @@ const fsSync = require('fs');
  *  await service.destroy() //停止、释放资源、清除事件监听
  */
 class SonorService extends EventEmitter {
+    static EVENTS = {
+        NOTIFICATION: 'sonorService:notification'
+    };
     #dataPath;
 
     /**
@@ -24,6 +27,30 @@ class SonorService extends EventEmitter {
         }
     }
 
+    /**
+     * 对外注册通知回调
+     * @param {Function} callback
+     */
+    onNotification(callback) { return this.on(SonorService.EVENTS.NOTIFICATION, callback); }
+    /**
+     * 解绑通知回调
+     * @param {Function} callback
+     */
+    offNotification(callback) { return this.off(SonorService.EVENTS.NOTIFICATION, callback); }
+    /**
+     * @param {string} message
+     * @param {string} [title]
+     * @param {'info'|'warn'|'error'|'success'} [level='info']
+     */
+    notify(message, level = 'info') {
+        this.emit(SonorService.EVENTS.NOTIFICATION, {
+            level,
+            message,
+            timestamp: Date.now()
+        });
+    }
+
+    
     get dataPath() { return this.#dataPath; }
 
     /**

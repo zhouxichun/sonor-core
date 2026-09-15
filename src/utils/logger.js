@@ -1,12 +1,24 @@
 const winston = require('winston')
 const DailyRotateFile = require('winston-daily-rotate-file')
 const path = require('path')
+const util = require('util');
 
-// 自动提取模块文件夹名
-function getModuleName(dir) { return path.basename(dir) }
+function getModuleName(module) { return module }
 
-// 日志格式
-const baseFormat = winston.format.combine( 
+// 增加标记避免重复解析splat
+const splatMergeFormat = winston.format((info) => {
+  if (info.__splatProcessed) return info;
+  const splatSymbol = Symbol.for('splat');
+  const args = [info.message, ...(info[splatSymbol] || [])];
+  info.message = util.format(...args);
+  info.__splatProcessed = true; // 标记已经处理过
+  delete info[splatSymbol]; // 清理splat，防止后续再读取
+  return info;
+})
+
+const baseFormat = winston.format.combine(
+  winston.format.splat(),
+  splatMergeFormat(),
   winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' })
 )
 
@@ -37,22 +49,18 @@ const rotateTransport = new DailyRotateFile({
   level: 'info'
 })
 
-// 工厂函数：每个模块独立传入路径、自动绑定模块名
 module.exports = function createLogger(dir) {
   const moduleName = getModuleName(dir)
-
   const logger = winston.createLogger({
     defaultMeta: { module: moduleName },
     format: fileFormat,
     transports: [rotateTransport]
   })
-
-  // 开发环境控制台输出
   if (process.env.NODE_ENV !== 'production') {
     logger.add(new winston.transports.Console({
-      format: consoleFormat
+      format: consoleFormat,
+      level: 'info'
     }))
   }
-
   return logger
 }

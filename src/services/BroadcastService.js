@@ -1,6 +1,5 @@
-const logger = require('../utils/logger')(__dirname);
+const logger = require('../utils/logger')('BroadcastService');
 class BroadcastService {
-    /** @type {Set<import('@fastify/websocket').WebSocket>} */
     static #clients = new Set();
     /**
      * @param {import('@fastify/websocket').WebSocket} connection
