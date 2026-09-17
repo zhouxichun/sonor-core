@@ -1,38 +1,56 @@
-const EventEmitter = require('events');
 const { execFile } = require('child_process');
-const logger = require('../utils/logger')('UsbDriver');
+const SonorService = require('./SonorService');
+const logger = require('../utils/logger')('UsbService');
 
-class UsbDriver extends EventEmitter {
-    static #EVENTS = {
-        USB_FOUND: 'UsbDriver:usb_found',
-        ERROR: 'UsbDriver:error'
+class UsbService extends SonorService {
+    static EVENTS = {
+        DEVICE_FOUND: 'usb:device_found',
+        ERROR: 'usb:error'
     };
-    #devices;
+    #devices = [];
     #abortController;
-    #timeoutId = null;
+    #timerScan = null;
     #options = {
-        scanInterval: 2000  // 2秒扫描一次
+        scanInterval: 2000 
     }; 
 
     /**
      * @param {object} [options={}]
      */
-    constructor(options = {}) {
+    constructor(opts={}) {
         super();
-        this.#devices = null;
+        this.#options = {...this.#options, ...opts};
         this.#abortController = new AbortController();
-        this.#options = {...this.#options, ...options};
         logger.info('instance created');
     }
     
     async start(){
-        logger.info('start');
         this.#scheduleNextScan();
+        logger.info('service started');
     }
 
+    /**
+     * 销毁实例：清除timeout、终止子进程、清空状态、清除全部事件监听
+     * 调用后实例不可复用
+     */
+    destroy() {
+        if(this.#timerScan){
+            clearTimeout(this.#timerScan);
+            this.#timerScan = null;
+            logger.debug('scan timer cleared');
+        }
+        if (this.#abortController) {
+            this.#abortController.abort();
+            logger.debug('abortController aborted');
+            this.#abortController = null;
+        }
+        this.#devices = null;
+        logger.debug('destroy done');
+    }
+    
     #scheduleNextScan() {
         if (!this.#abortController) return;
-        this.#timeoutId = setTimeout(() => {
+        this.#timerScan = setTimeout(() => {
             this.#scanLoop();
         }, this.#options.scanInterval);
     }
@@ -41,7 +59,7 @@ class UsbDriver extends EventEmitter {
         try {
             await this.loadDevices();
         } catch (err) {
-            this.#emitError('USB扫描异常', err);
+            logger.error('USB扫描异常', err);
         } finally {
             this.#scheduleNextScan();
         }
@@ -51,12 +69,11 @@ class UsbDriver extends EventEmitter {
      * 订阅USB发现事件
      * @param {Function} callback
      */
-    onUsbFound(callback) { this.on(UsbDriver.#EVENTS.USB_FOUND, callback); }
-    /**
-     * 订阅错误事件
-     * @param {Function} callback
-     */
-    onError(callback) { this.on(UsbDriver.#EVENTS.ERROR, callback); }
+    onDeviceFound(callback) { this.on(UsbService.EVENTS.DEVICE_FOUND, callback); }
+    offDeviceFound(callback) { this.off(UsbService.EVENTS.DEVICE_FOUND, callback); }
+
+    getDevices(){ return [...this.#devices]; }
+
     /**
      * 加载USB挂载设备列表
      */
@@ -93,37 +110,13 @@ class UsbDriver extends EventEmitter {
             const newStr = JSON.stringify(newDevices);
             if(oldStr !== newStr){
                 this.#devices = newDevices;
-                logger.info('usb mount points detected', this.#devices.length, this.#devices);
-                this.emit(UsbDriver.#EVENTS.USB_FOUND, [...this.#devices]);
+                this.emit(UsbService.EVENTS.DEVICE_FOUND, [...this.#devices]);
             }
         } catch (err) {
-            this.#emitError('USB设备加载失败', err);
+            logger.error('USB设备加载失败', err);
         }
     }
-    #emitError(message, err) {
-        logger.error(message, err);
-        this.emit(UsbDriver.#EVENTS.ERROR, { message, error: err });
-    }
-    /**
-     * 销毁实例：清除timeout、终止子进程、清空状态、清除全部事件监听
-     * 调用后实例不可复用
-     */
-    destroy() {
-        logger.info('destroy');
-        // 清除timeout
-        if(this.#timeoutId){
-            clearTimeout(this.#timeoutId);
-            this.#timeoutId = null;
-            logger.debug('scan timer cleared');
-        }
-        if (this.#abortController) {
-            this.#abortController.abort();
-            logger.debug('abortController aborted');
-            this.#abortController = null;
-        }
-        this.removeAllListeners();
-        this.#devices = null;
-        logger.debug('destroy completed');
-    }
+
+    
 }
-module.exports = UsbDriver;
+module.exports = UsbService;

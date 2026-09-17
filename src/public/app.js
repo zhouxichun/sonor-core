@@ -1,33 +1,41 @@
 const app = angular.module('sonorApp', []);
 app.controller('MainCtrl',['$scope','$timeout',function($scope,$timeout){
-    const apiBase = '/api';
     // ====================== 全局状态变量 ======================
+    const apiBase = '/api';
+    $scope.clientId = null;
+    // ====================== UI相关 ======================
     // 视图与筛选状态
     $scope.viewMode = 'player';
-    
-    $scope.libGroups = {};
-    $scope.libFilter = {keyword:''};
-    $scope.libTracks = [];
+    // 弹出菜单
+    $scope.openDropdownUuid = null;
+    //toasts
+    $scope.toastList = [];
+
+    // 分组统计及浏览
+    $scope.groupStats = {};    
     $scope.activeGroup = 'artists';
     $scope.groupList = [];
-    // 播放器状态（websocket同步更新）
+    $scope.libFilter = {keyword:''};
+    $scope.libTracks = []; 
+
+    // ====================== 播放列表 ======================
+    $scope.playlist = [];
+    $scope.random = false;
+
+    // ====================== 播放相关 ======================
     $scope.playerStatus = {};
     $scope.currentTime = 0;
     $scope.totalTime = 0;
     $scope.progressPercent = 0;
-    $scope.currentTrack = null;
+    $scope.currentTrack = {};
+    $scope.cover = null;
     $scope.parsedLyric = [];
-    $scope.currentCover = null;
-    $scope.folderList = [];
-    //歌词滚动开关
     $scope.lyricAutoScroll = true;
-
-    // UI通用状态
-    $scope.toastMessage = '';
-    $scope.openDropdownUuid = null;
-    // 弹窗状态
     $scope.showCoverPopup = false;
-    $scope.toastList = [];
+
+    // ====================== 设置相关 ======================
+    $scope.folderList = [];
+
 
     // ====================== UI通用工具函数 ======================
     /**
@@ -58,8 +66,6 @@ app.controller('MainCtrl',['$scope','$timeout',function($scope,$timeout){
             }, 600); // 和css动画时长保持一致
         }, 2000);
     };
-
-
     /**
      * 切换页面视图
      * @param {string} mode player / library / playlist / setup
@@ -82,7 +88,9 @@ app.controller('MainCtrl',['$scope','$timeout',function($scope,$timeout){
         const sec = Math.floor(s%60);
         return String(m).padStart(2,'0')+':'+String(sec).padStart(2,'0');
     };
-    
+    /**
+     * 切换歌词是否自动滚动
+     */
     $scope.toggleLyricAutoScroll = function(){ $scope.lyricAutoScroll = !$scope.lyricAutoScroll; };
     /**
      * 关闭播放列表下拉菜单
@@ -110,20 +118,59 @@ app.controller('MainCtrl',['$scope','$timeout',function($scope,$timeout){
      */
     $scope.openCoverPopup = function($event) {
         $event.stopPropagation();
-        $scope.showCoverPopup = !!$scope.currentCover;
+        $scope.showCoverPopup = !!$scope.cover.base64;
     };
     /**
      * 关闭封面弹窗
      */
     $scope.closeCoverPopup = function() { $scope.showCoverPopup = false; };
-    // ====================== LRC歌词解析工具 ======================
   
 
-    // ====================== 【WS订阅，精简】======================
+    // ====================== webservice 消息处理 ======================
+    /**
+     * 筛选不同分组的统计数据并排序
+     * @param {*} activeGroup 
+     * @returns 
+     */
+    function selectGroup(activeGroup) {
+        const list = $scope.groupStats[activeGroup];
+        if(list && list.length > 0)
+            return list.sort((a,b) => a.name.localeCompare(b.name, 'zh-CN'));
+        else
+            return [];
+    }
+    /**
+     * 解析lrc歌词字符串
+     * @param {string} lrcStr
+     * @returns Array<{time:number,text:string,isActive?:boolean}>
+     */
+    function parseLrc(lrcStr){
+        if(!lrcStr) return [];
+        const lines = lrcStr.split('\n');
+        const result = [];
+        // [mm:ss.xx] 正则
+        const reg = /\[(\d{2}):(\d{2})\.(\d{2,3})\]/;
+        for(const line of lines){
+            const match = line.match(reg);
+            if(!match) continue;
+            const min = parseInt(match[1],10);
+            const sec = parseInt(match[2],10);
+            const ms = parseInt(match[3],10);
+            const time = min*60 + sec + ms/1000;
+            const text = line.replace(reg,'').trim();
+            if(text){
+                result.push({time, text});
+            }
+        }
+        // 按时间升序
+        result.sort((a,b)=>a.time - b.time);
+        result.push({time:99999,text:'-> End <-'});
+        return result;
+    }
     WsService.on('group-stats', data => {
          $scope.$evalAsync(()=>{
-            $scope.libGroups = data;
-            $scope.groupList = $scope.libGroups[$scope.activeGroup];
+            $scope.groupStats = data;
+            $scope.groupList = selectGroup($scope.activeGroup);
         });
     })
     .on('filtered-tracks', data => {
@@ -133,7 +180,12 @@ app.controller('MainCtrl',['$scope','$timeout',function($scope,$timeout){
     })
     .on('playlist', data => {
         $scope.$evalAsync(()=>{
-            $scope.playlistTracks = data;
+            $scope.playlist = data;
+        });
+    })
+    .on('playlist-random', data => {
+        $scope.$evalAsync(()=>{
+            $scope.random = data;
         });
     })
     .on('current-track', (data)=>{
@@ -148,8 +200,9 @@ app.controller('MainCtrl',['$scope','$timeout',function($scope,$timeout){
     })
     .on('track-cover', (data)=>{
         $scope.$evalAsync(()=>{
-            $scope.currentCover = data.base64;
-            document.documentElement.style.setProperty('--base-h', data.theme.h);
+           $scope.cover = data;
+           if( data && data.theme )
+            document.documentElement.style.setProperty('--base-h', $scope.cover.theme.h);
         });
     })
     .on('player-status', (data)=>{
@@ -196,55 +249,37 @@ app.controller('MainCtrl',['$scope','$timeout',function($scope,$timeout){
         });
     })
     .on('usb-devices', data => {
-        $scope.folderList = data;
+        $scope.$evalAsync(()=>{ $scope.usbDevices = data;});
     })
     .on('notification', payload => {
-       $scope.$evalAsync(()=>{
-            $scope.showToast(payload);
-        }); 
+       $scope.$evalAsync(()=>{ $scope.showToast(payload); }); 
     });
 
-    // ====================== 播放器控制 HTTP接口 ======================
+    // ====================== 播放 ======================
     /**
-     * 通过uuid播放曲目
+     * 点击播放列表释放歌曲
      * @param {string} uuid
      */
     $scope.playTrack = function(uuid) {
         $scope.openDropdownUuid = null;
         WsService.sendCommand('play-uuid',{uuid:uuid});
+        $scope.viewMode = "player";
     };
-    /**
-     * 播放 / 暂停切换
-     */
-    $scope.playPause = function(){ WsService.sendCommand('play-pause') };
-    /**
-     * 上一曲
-     */
+   
+    $scope.playPause = function(){ $scope.playerStatus.playing ? WsService.sendCommand('play-pause') : WsService.sendCommand('play-uuid', {uuid:$scope.currentTrack.uuid}); };
+
     $scope.playPrev = function(){ WsService.sendCommand('play-prev')};
-    /**
-     * 下一曲
-     */
+
     $scope.playNext = function(){ WsService.sendCommand('play-next')};
-    /**
-     * 停止播放
-     */
+
     $scope.playerStop = function(){ WsService.sendCommand('play-stop')};
-    /**
-     * 切换循环模式
-     */
+
     $scope.toggleLoop = function(){ WsService.sendCommand('toggle-loop')};
-    /**
-     * 切换随机模式
-     */
+  
     $scope.toggleRandom = function(){ WsService.sendCommand('toggle-random')};
-    /**
-     * 切换静音
-     */
+
     $scope.toggleMute = function(){ WsService.sendCommand('toggle-mute')};
-    /**
-     * 进度条点击跳转
-     * @param {MouseEvent} $event
-     */
+
     $scope.seekBarClick = function($event){
         if(!$scope.totalTime) return;
         const barEl = $event.currentTarget;
@@ -254,25 +289,22 @@ app.controller('MainCtrl',['$scope','$timeout',function($scope,$timeout){
         WsService.sendCommand('play-seek',{pos:targetSec});
     };
     
-    // ====================== 播放列表管理 ======================
+    // ====================== 播放列表 ======================
+
     /**
      * 从播放列表移除单首歌曲
      * @param {string} uuid
      */
     $scope.removeFromPlaylist = function(uuid){
         $scope.openDropdownUuid = null;
-        if(!confirm("确定将该曲目从播放列表移除？")) return;
-        WsService.sendCommand('playlist-remove',{uuid: uuid});
+        confirm("确定将该曲目从播放列表移除？") && WsService.sendCommand('playlist-remove',{uuid: uuid});
     };
     /**
      * 清空整个播放列表
      */
-    $scope.clearPlaylist = function(){
-        if(!confirm("确定清空播放列表？")) return;
-        WsService.sendCommand('playlist-clear');
-    };
+    $scope.clearPlaylist = function(){ confirm("确定清空播放列表？") && WsService.sendCommand('playlist-clear'); };
     /**
-     * 添加单首曲目到播放列表
+     * 添加一个曲目或所有曲目到播放列表
      * @param {string} uuid
      */
     $scope.addTrackToPlaylist = function(uuid){
@@ -280,14 +312,15 @@ app.controller('MainCtrl',['$scope','$timeout',function($scope,$timeout){
         let uuidList = uuid ? [uuid] : $scope.libTracks.map(t => t.uuid);
         WsService.sendCommand('playlist-add',{uuids: uuidList});
     };
-    // ====================== 音乐库逻辑（艺术家/专辑/流派分组） ======================
+
+    // ====================== 音乐库 ======================
     /**
      * 搜索音乐库曲目
      */
     $scope.doSearch = function () {
         if (!$scope.libFilter.keyword.trim()) return;
         $scope.selectedGroupName = null;
-        WsService.sendCommand('lib-filter', {keyword:$scope.libFilter.keyword.trim()})
+        WsService.sendCommand('lib-filter', {keyword:$scope.libFilter.keyword.trim()});
     };
     /**
      * 切换分组类型 artist / album / genre
@@ -297,7 +330,7 @@ app.controller('MainCtrl',['$scope','$timeout',function($scope,$timeout){
         $scope.libFilter.keyword = '';
         $scope.activeGroup = group;
         $scope.selectedGroupName = null;
-        $scope.groupList = $scope.libGroups[group];
+        $scope.groupList = selectGroup(group);
     };
     /**
      * 点开分组项，筛选该分组下全部曲目
@@ -311,63 +344,32 @@ app.controller('MainCtrl',['$scope','$timeout',function($scope,$timeout){
             case 'albums': filter.album = item.name; break;
             case 'genres': filter.genre = item.name; break;
         }
-        WsService.sendCommand('lib-filter', filter)
+        $scope.libTracks = [];
+        WsService.sendCommand('lib-filter', filter);
     };
-    // ====================== 设置模块：音源目录扫描 ======================
-    
+    // ====================== 设置模块 ======================
     /**
      * 触发后台扫描指定文件夹
      * @param {string} folderPath
      */
     $scope.scanFolder = function(folderPath){ WsService.sendCommand('scan-folder',{folderPath: folderPath}); };
-    /**
-     * 切换静音
-     */
+  
     $scope.setVolume = function(volume){ WsService.sendCommand('set-volume',{volume: $scope.playerStatus.volume}); };
-    // 重启
-    $scope.systemReboot = function () {
-        if (!confirm('确认要重启设备？')) return;
-        WsService.sendCommand('reboot');
 
-    };
-    // 关机
-    $scope.systemShutdown = function () {
-        if (!confirm('确认要关机设备？')) return;
-        WsService.sendCommand('shutdown');
-    };
+    $scope.systemReboot = function () { confirm('确认要重启设备？') && WsService.sendCommand('reboot'); };
 
-    /**
-     * 解析lrc歌词字符串
-     * @param {string} lrcStr
-     * @returns Array<{time:number,text:string,isActive?:boolean}>
-     */
-    function parseLrc(lrcStr){
-        if(!lrcStr) return [];
-        const lines = lrcStr.split('\n');
-        const result = [];
-        // [mm:ss.xx] 正则
-        const reg = /\[(\d{2}):(\d{2})\.(\d{2,3})\]/;
-        for(const line of lines){
-            const match = line.match(reg);
-            if(!match) continue;
-            const min = parseInt(match[1],10);
-            const sec = parseInt(match[2],10);
-            const ms = parseInt(match[3],10);
-            const time = min*60 + sec + ms/1000;
-            const text = line.replace(reg,'').trim();
-            if(text){
-                result.push({time, text});
-            }
-        }
-        // 按时间升序
-        result.sort((a,b)=>a.time - b.time);
-        result.push({time:99999,text:'-> End <-'});
-        return result;
-    }
+    $scope.systemShutdown = function () { confirm('确认要关机设备？') && WsService.sendCommand('shutdown'); };
 
     // ====================== 页面初始化入口 ======================
+    WsService.setClientIdChangeHandler((id) => {
+        if(!id){
+            $scope.clientId = id;
+            $scope.$apply(); 
+        }else{
+            $timeout(() => { $scope.clientId = id; }, 1500);
+        }
+    });
     WsService.connect();
-
 }])
 .directive('debounceClick', function() {
     return {

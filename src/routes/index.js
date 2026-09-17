@@ -1,106 +1,164 @@
-const fs = require('fs');
-const path = require('path');
 const BroadcastService = require('../services/BroadcastService');
+const SystemService = require('../services/SystemService');
+const AudioLibraryService = require('../services/AudioLibraryService');
+const PlayerService = require('../services/PlayerService');
+const PlaylistService = require('../services/PlaylistService');
+const UsbService = require('../services/UsbService');
 const logger = require('../utils/logger')('routes');
+const { customAlphabet } = require('nanoid');
+const nanoid4 = customAlphabet('0123456789abcdefghijklmnopqrstuvwxyz', 4);
 
-async function routes(fastify, opts) {
-    const {playService, audioLibraryService, systemService } = fastify;
+async function routes(fastify) {
+    const audioLibraryService = new AudioLibraryService();
+    const playlistService =  new PlaylistService();
+    const playerService =  new PlayerService();
+    const usbService = new UsbService();
+    let serviceReady = false;
 
-    fastify.get('/', () => { return 'Hi Sonor!'});
-    
-    // 保存回调引用
-    const onNotification = (data) => BroadcastService.broadcast({ type: 'notification', data });
-    const onGroupStatsUpdate = (data) => BroadcastService.broadcast({type:'group-stats',data});
-    const onCoverReady = (data) => BroadcastService.broadcast({type:'track-cover',data});
-    const onStateUpdated = (data) => BroadcastService.broadcast({type:'player-status',data});
-    const onTimeUpdated = (data) => BroadcastService.broadcast({type:'player-time',data});
-    const onCurrentTrack = (uuid) => {
-        const track = audioLibraryService.getTrackByUuid(uuid);
-        BroadcastService.broadcast({type:'current-track',data:track});
-        audioLibraryService.readyCover(uuid);
-    };
-    const onPlaylistUpdated = (playlist) => BroadcastService.broadcast({type:'playlist',data:playlist});
-
-    // 注册监听
-    
-    audioLibraryService.onGroupStatsUpdate(onGroupStatsUpdate);
-    audioLibraryService.onCoverReady(onCoverReady);
-    audioLibraryService.onNotification(onNotification);
-    playService.onStateUpdated(onStateUpdated);
-    playService.onTimeUpdated(onTimeUpdated);
-    playService.onCurrentTrack(onCurrentTrack);
-    playService.onPlaylistUpdated(onPlaylistUpdated);
-    playService.onNotification(onNotification);
-    // 插件关闭时解绑，防止重复注册
-    fastify.addHook('onClose', async () => {
-        audioLibraryService.offGroupStatsUpdate(onGroupStatsUpdate);
-        audioLibraryService.offCoverReady(onCoverReady);
-        audioLibraryService.offNotification(onNotification);
-        playService.offStateUpdated(onStateUpdated);
-        playService.offTimeUpdated(onTimeUpdated);
-        playService.offCurrentTrack(onCurrentTrack);
-        playService.offPlaylistUpdated(onPlaylistUpdated);
-        playService.offNotification(onNotification);
-    });
-
-    fastify.get('/ws', { websocket: true }, socket => {
-        logger.debug('websocket client connected');
-        BroadcastService.addClient(socket);
-        // 同步加入fastify.wsClients集合，用于优雅关闭时批量断开
-        fastify.wsClients.add(socket);
-        // 新客户端连上，立刻下发播放器状态  
-        function safeSend(payload) {
-            try {
-                socket.send(JSON.stringify(payload));
-            } catch (e) { logger.debug('ws send failed, client may be disconnected:', e.message); }
-        }      
-
-        safeSend({ type: 'player-status', data: playService.getStatus() });
-        safeSend({ type: 'playlist', data: playService.getPlaylist() });
-        safeSend({ type: 'group-stats', data: audioLibraryService.getGroupStats() });
-        safeSend({ type: 'usb-devices', data: audioLibraryService.getFolders() });
-
-        const uuid = playService.getCurrentUuid();
-        if (uuid) {
-            safeSend({ type: 'current-track', data: audioLibraryService.getTrackByUuid(uuid)});
-            audioLibraryService.readyCover(uuid);
+    // ========== 【重点】全部回调放到最前面定义 ==========
+    const cbScanNotify = payload => BroadcastService.broadcastNotify(payload.message, payload.level);
+    const cbGroupStatsUpdate = (data) => BroadcastService.broadcast({type:'group-stats',data:data});
+    const cbCoverReady = (data) => BroadcastService.broadcast({type:'track-cover',data:data});
+    const cbPlaylistUpdated = payload => {
+        const {action, count} = payload;
+        switch(action){
+            case 'add':
+                if(count > 0){
+                    BroadcastService.broadcastNotify(`播放列表已更新, 增加 ${count} 首曲目`,'success');
+                    BroadcastService.broadcast({type:'playlist', data: playlistService.getPlaylist()});
+                }else{BroadcastService.broadcastNotify('已在播放列表中, 无需重复操作');}
+                break;
+            case 'remove':
+                if(count > 0){
+                    BroadcastService.broadcastNotify(`播放列表已更新, 移除 ${count} 首曲目`, 'success'); 
+                    BroadcastService.broadcast({type:'playlist', data: playlistService.getPlaylist()});
+                }else{BroadcastService.broadcastNotify('未移除任何曲目');}
+                break;
+            case 'clear':
+                BroadcastService.broadcastNotify('播放列表已清空', 'success'); 
+                BroadcastService.broadcast({type:'playlist', data: playlistService.getPlaylist()});
+                break;
+            default:
+                break;
+        }
+    } 
+    const cbCurrentUuid = (uuid) => {
+        logger.info('track changed:', uuid);
+        if( uuid ){
+            const track = audioLibraryService.getTrackByUuid(uuid);
+            if(!track){
+                logger.error('audio file missing, uuid:', uuid);
+                return;
+            }
+            audioLibraryService.readyCover(track.uuid);
+            BroadcastService.broadcast({type:'current-track',data: track});
+            playerService.playback(track.filepath);
+        }else{
+            playerService.stop();
+            BroadcastService.broadcast({type:'track-cover',data: {}});
+            BroadcastService.broadcast({type:'current-track',data: {}});
         }
         
+    }
+    const cbPlayerStatusUpdated = (data) => BroadcastService.broadcast({type:'player-status',data});
+    const cbEndFile = () =>{
+        logger.info('playback end and go next');
+        playlistService.goNext();
+    }
+    const cbTimeUpdated = (data) => BroadcastService.broadcast({type:'player-time',data});
+    const cbUsbDeviceFound = (devices) => {
+        logger.info('usb devices found:', devices);
+        BroadcastService.broadcast({type:'usb-devices', data: devices})
+        for (const device of devices) {
+            BroadcastService.broadcastNotify('发现USB设别');
+            audioLibraryService.addDevice(device.path);
+        }
+        audioLibraryService.GroupStats();
+        serviceReady = true;
+    }
+
+    fastify.addHook('onReady', async () => {
+        logger.info('fastify ready, starting business services');
+        audioLibraryService.start();
+        playlistService.start();
+        playerService.start();
+        usbService.start();
+        logger.info('all services ready');
+        // 注册监听
+        usbService.onDeviceFound(cbUsbDeviceFound);
+        audioLibraryService.onGroupStatsUpdate(cbGroupStatsUpdate);
+        audioLibraryService.onScanNotify(cbScanNotify);
+        audioLibraryService.onCoverReady(cbCoverReady);
+        playlistService.onPlaylistUpdated(cbPlaylistUpdated);
+        playlistService.onCurrentUuid(cbCurrentUuid);
+        playerService.onPlayerStatusUpdated(cbPlayerStatusUpdated);
+        playerService.onEndFile(cbEndFile);
+        playerService.onTimeUpdated(cbTimeUpdated);
+    });
+
+    fastify.addHook('onClose', async () => {
+        logger.info('destroying audioLibraryService'); 
+        audioLibraryService.offScanNotify(cbScanNotify);
+        audioLibraryService.offGroupStatsUpdate(cbGroupStatsUpdate);
+        audioLibraryService.offCoverReady(cbCoverReady);
+        audioLibraryService.destroy();
+
+        logger.info('destroying playlistService'); 
+        playlistService.offPlaylistUpdated(cbPlaylistUpdated);
+        playlistService.offCurrentUuid(cbCurrentUuid);
+        playlistService.destroy();
+
+        logger.info('destroying playerService'); 
+        playerService.offPlayerStatusUpdated(cbPlayerStatusUpdated);
+        playerService.offEndFile(cbEndFile);
+        playerService.offTimeUpdated(cbTimeUpdated);
+        playerService.destroy();
+
+        logger.info('destroying usbService'); 
+        usbService.offDeviceFound(cbUsbDeviceFound);
+        usbService.destroy();
+
+        logger.info('all services destroyed');
+    });
+
+    fastify.get('/', () => { return 'Hi Sonor!'});
+
+    fastify.get('/ws', { websocket: true }, socket => {
+        if(!serviceReady) {
+            socket.close(1013, 'service not ready, retry later');
+            return;
+        }
+        const clientId = nanoid4();
+        logger.debug('websocket client connected, id = ', clientId);
+        BroadcastService.addClient(clientId, socket);
+        
+        BroadcastService.sendToClient(clientId, { type: 'hello-sonor', data: {clientId: clientId} });
+        BroadcastService.sendToClient(clientId, { type: 'group-stats', data: audioLibraryService.getGroupStats() });
+        BroadcastService.sendToClient(clientId, { type: 'player-status', data: playerService.getPlayerStatus() });
+        BroadcastService.sendToClient(clientId, { type: 'playlist', data: playlistService.getPlaylist() });
+        BroadcastService.sendToClient(clientId, { type: 'playlist-random', data: playlistService.getRandom() });
+        const currentUuid = playlistService.getCurrentUuid();
+        if(currentUuid){
+            audioLibraryService.readyCover(currentUuid);
+            BroadcastService.sendToClient(clientId, { type: 'current-track', data: audioLibraryService.getTrackByUuid(currentUuid)});
+        }else{
+            BroadcastService.sendToClient(clientId, { type: 'current-track', data: {}});
+        }
+        BroadcastService.sendToClient(clientId, { type: 'usb-devices', data: usbService.getDevices()});
+
         socket.on('message', async (rawMsg) => {
             let msg;
-            try {
-                msg = JSON.parse(rawMsg.toString());
-            } catch (err) { logger.error('ws message handle error', err); }
-
+            try { msg = JSON.parse(rawMsg.toString()); } catch (err) { logger.error('ws message handle error', err); }
             if(!msg) return;
             logger.debug('ws recv:', msg);
-
             const {action, payload} = msg;
             switch(action){
                 case 'lib-filter':
                     const tracks = audioLibraryService.filterTracks(payload);
-                    safeSend({ type:'filtered-tracks', data: tracks });
+                    BroadcastService.sendToClient(clientId, { type:'filtered-tracks', data: tracks });
                     break;
-                case 'play-uuid':
-                    playService.playByUuid(payload.uuid); break;
-                case 'play-pause':
-                    playService.playPause(); break;
-                case 'play-prev':
-                    playService.playNext(-1); break;
-                case 'play-next':
-                    playService.playNext(1); break;
-                case 'play-stop':
-                    playService.stop(); break;
-                case 'play-seek':
-                    playService.seek(payload.pos); break;
-                case 'toggle-loop':
-                    playService.toggleLoop(); break;
                 case 'toggle-random':
-                    playService.toggleRandom(); break;
-                case 'toggle-mute':
-                    playService.toggleMute(); break;
-                case 'set-volume':
-                    playService.setVolume(payload.volume); break;
+                    BroadcastService.broadcast({ type:'playlist-random', data:  playlistService.toggleRandom() }); break;
                 case 'playlist-add':
                     const {uuids} = payload;
                     const trackList = uuids
@@ -114,34 +172,59 @@ async function routes(fastify, opts) {
                         genre: item.genre,
                         filepath: item.filepath
                     }));
-                    playService.pushList(trackList);
+                    playlistService.pushList(trackList);
                     break;
                 case 'playlist-remove':
-                    playService.removeTracksByUuids([payload.uuid]); break;
+                    playlistService.removeTracksByUuids([payload.uuid]); break;
                 case 'playlist-clear':
-                    playService.clearPlaylist(); break;
+                    playlistService.clearPlaylist(); break;
+                case 'play-uuid':
+                    playlistService.setCurrentUuid(payload.uuid);
+                    break;
+                case 'play-pause':
+                    playerService.togglePause(); 
+                    break;
+                case 'play-prev':
+                    playlistService.goPrev(); break;
+                case 'play-next':
+                    playlistService.goNext(); break;
+                case 'play-stop':
+                    playerService.stop(); break;
+                case 'play-seek':
+                    playerService.seek(payload.pos); break;
+                case 'toggle-loop':
+                    playerService.toggleLoop(); break;
+                case 'toggle-mute':
+                    playerService.toggleMute(); break;
+                case 'set-volume':
+                    playerService.setVolume(payload.volume); break;
                 case 'scan-folder':
                     audioLibraryService.scanFolder(payload.folderPath); break;
                 case 'reboot':
-                    systemService.reboot(); break;
+                    BroadcastService.notify(clientId, '设备正在重启', 'warn');
+                    setTimeout(() => {
+                        SystemService.reboot(); 
+                    }, 1000); 
+                    break;
                 case 'shutdown':
-                    systemService.shutdown(); break;
+                    BroadcastService.notify(clientId, '设备正在关机', 'warn');
+                     setTimeout(() => {
+                        SystemService.shutdown(); 
+                    }, 1000); 
+                    break;
                 default:
                     break;
             }
-
         });
-        // ==========================================
 
         socket.on('close', () => {
             logger.info('websocket client closed');
-            BroadcastService.removeClient(socket);
-            fastify.wsClients.delete(socket);
+            BroadcastService.removeClient(clientId, socket);
         });
+        
         socket.on('error', (err) => {
             logger.warn(`ws client error: ${err.message}`);
-            BroadcastService.removeClient(socket);
-            fastify.wsClients.delete(socket);
+            BroadcastService.removeClient(clientId, socket);
         });
     });
 }
