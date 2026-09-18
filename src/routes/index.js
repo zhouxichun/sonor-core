@@ -17,7 +17,11 @@ async function routes(fastify) {
 
     // ========== 【重点】全部回调放到最前面定义 ==========
     const cbScanNotify = payload => BroadcastService.broadcastNotify(payload.message, payload.level);
-    const cbGroupStatsUpdate = (data) => BroadcastService.broadcast({type:'group-stats',data:data});
+    const cbGroupStatsUpdate = (data) => {
+        serviceReady = true;
+        BroadcastService.broadcast({type:'group-stats',data:data});
+    }
+
     const cbCoverReady = (data) => BroadcastService.broadcast({type:'track-cover',data:data});
     const cbPlaylistUpdated = payload => {
         const {action, count} = payload;
@@ -66,15 +70,24 @@ async function routes(fastify) {
         playlistService.goNext();
     }
     const cbTimeUpdated = (data) => BroadcastService.broadcast({type:'player-time',data});
-    const cbUsbDeviceFound = (devices) => {
-        logger.info('usb devices found:', devices);
-        BroadcastService.broadcast({type:'usb-devices', data: devices})
+    const cbUsbDeviceAdded = (devices) => {
+        logger.info('usb devices added:', devices);
+        BroadcastService.broadcast({type:'usb-devices', data: usbService.getDevices()});
         for (const device of devices) {
             BroadcastService.broadcastNotify('发现USB设别');
             audioLibraryService.addDevice(device.path);
         }
         audioLibraryService.GroupStats();
-        serviceReady = true;
+    }
+
+    const cbUsbDeviceRemoved = (devices) => {
+        logger.info('usb devices removed:', devices);
+        BroadcastService.broadcast({type:'usb-devices', data: devices})
+        for (const device of devices) {
+            BroadcastService.broadcastNotify('USB设别已移除');
+            audioLibraryService.removeDevice(device.path);
+        }
+        audioLibraryService.GroupStats();
     }
 
     fastify.addHook('onReady', async () => {
@@ -85,7 +98,8 @@ async function routes(fastify) {
         usbService.start();
         logger.info('all services ready');
         // 注册监听
-        usbService.onDeviceFound(cbUsbDeviceFound);
+        usbService.onDeviceAdded(cbUsbDeviceAdded);
+        usbService.onDeviceRemoved(cbUsbDeviceRemoved);
         audioLibraryService.onGroupStatsUpdate(cbGroupStatsUpdate);
         audioLibraryService.onScanNotify(cbScanNotify);
         audioLibraryService.onCoverReady(cbCoverReady);
@@ -115,7 +129,8 @@ async function routes(fastify) {
         playerService.destroy();
 
         logger.info('destroying usbService'); 
-        usbService.offDeviceFound(cbUsbDeviceFound);
+        usbService.offDeviceAdded(cbUsbDeviceAdded);
+        usbService.offDeviceRemoved(cbUsbDeviceRemoved);
         usbService.destroy();
 
         logger.info('all services destroyed');

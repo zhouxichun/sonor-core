@@ -4,7 +4,8 @@ const logger = require('../utils/logger')('UsbService');
 
 class UsbService extends SonorService {
     static EVENTS = {
-        DEVICE_FOUND: 'usb:device_found',
+        DEVICE_ADD: 'usb:device_add',
+        DEVICE_REMOVE: 'usb:device_remove',
         ERROR: 'usb:error'
     };
     #devices = [];
@@ -65,12 +66,10 @@ class UsbService extends SonorService {
         }
     }
 
-    /**
-     * 订阅USB发现事件
-     * @param {Function} callback
-     */
-    onDeviceFound(callback) { this.on(UsbService.EVENTS.DEVICE_FOUND, callback); }
-    offDeviceFound(callback) { this.off(UsbService.EVENTS.DEVICE_FOUND, callback); }
+    onDeviceAdded(callback) { this.on(UsbService.EVENTS.DEVICE_ADD, callback); }
+    offDeviceAdded(callback) { this.off(UsbService.EVENTS.DEVICE_ADD, callback); }
+    onDeviceRemoved(callback) { this.on(UsbService.EVENTS.DEVICE_REMOVE, callback); }
+    offDeviceRemoved(callback) { this.off(UsbService.EVENTS.DEVICE_REMOVE, callback); }
 
     getDevices(){ return [...this.#devices]; }
 
@@ -105,13 +104,19 @@ class UsbService extends SonorService {
                         });
                 }
             });
-            // 对比新旧列表，有变化才触发事件
-            const oldStr = JSON.stringify(this.#devices);
-            const newStr = JSON.stringify(newDevices);
-            if(oldStr !== newStr){
-                this.#devices = newDevices;
-                this.emit(UsbService.EVENTS.DEVICE_FOUND, [...this.#devices]);
-            }
+            
+            const oldDevices = [...this.#devices];
+            const newIds = new Set(newDevices.map(d => d.id));
+            const oldIds = new Set(oldDevices.map(d => d.id));
+
+            const added = newDevices.filter(d => !oldIds.has(d.id));
+            const removed = oldDevices.filter(d => !newIds.has(d.id));
+
+            (added.length > 0) && this.emit(UsbService.EVENTS.DEVICE_ADD, added);
+            (removed.length > 0) && this.emit(UsbService.EVENTS.DEVICE_REMOVE, removed);
+
+            this.#devices = newDevices;
+
         } catch (err) {
             logger.error('USB设备加载失败', err);
         }

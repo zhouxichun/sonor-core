@@ -68,7 +68,6 @@ class AudioLibraryService extends SonorService {
 
     addDevice(device) {
         const folderPath = path.resolve(device);
-        console.log(folderPath);
         let stat;
         try {
             stat = fsSync.statSync(folderPath);
@@ -97,6 +96,16 @@ class AudioLibraryService extends SonorService {
             logger.info(`add new device ${device}`);
         }
         this.#saveLibrary();
+    }
+
+    removeDevice(device) {
+        const folderPath = path.resolve(device);
+        let currentItem = this.#findAudioItem(folderPath);
+        if (currentItem) {
+            currentItem.status = 'unmounted';
+            logger.info('unmounted device: ', folderPath);
+            this.#saveLibrary();
+        } 
     }
 
     async scanFolder(folderPath){
