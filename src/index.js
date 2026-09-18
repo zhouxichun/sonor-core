@@ -1,10 +1,13 @@
-const fastify = require('fastify')({ logger: { level: 'info' } });
+const fastify = require('fastify')({ logger: false });
 const path = require('path');
 const fastifyStatic = require('@fastify/static');
 const config = require('./config');
 const logger = require('./utils/logger')('root');
 
 async function main() {
+
+  logger.info('====== here goes the Sonor-core ======');
+
   logger.info('fastify registering plugin: @fastify/websocket');
   await fastify.register(require('@fastify/websocket'));
 
@@ -32,7 +35,6 @@ async function main() {
   }
 }
 
-// 只做一件事：收到信号调用 fastify.close()
 process.on('SIGINT', () => {
   logger.info('SIGINT received, start fastify close');
   fastify.close().catch(e => logger.error('fastify close error', e));

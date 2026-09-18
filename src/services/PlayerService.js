@@ -72,8 +72,9 @@ class PlayerService extends SonorService {
      * 销毁实例，关闭mpv进程、socket连接，清理资源
      */
     destroy() {
-        this.#saveData().catch(err => { logger.error('destroy: saveData failed', err);});
         if (this.#destroying) return;
+        logger.info('saving data before destroy')
+        this.#saveData().catch(err => { logger.error('destroy: saveData failed', err);});
         this.#destroying = true;
         this.#cleanup();
         logger.info('destroy done');
@@ -135,7 +136,7 @@ class PlayerService extends SonorService {
         this.#mpv.stderr.on('data', d => logger.debug(d.toString('utf8')));
 
         this.#mpv.on('exit', (code, signal) => {
-            logger.warn(`mpv process exit, code=${code}, signal=${signal}`);
+            logger.info(`mpv process exit, code=${code}, signal=${signal}`);
             if (!this.#destroying && signal !== 'SIGINT') {
                 this.emit(PlayerService.EVENTS.ERROR, { code, signal });
             }

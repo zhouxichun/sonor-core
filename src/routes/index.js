@@ -110,7 +110,7 @@ async function routes(fastify) {
         playerService.onTimeUpdated(cbTimeUpdated);
     });
 
-    fastify.addHook('onClose', async () => {
+    fastify.addHook('preClose', async () => {
         logger.info('destroying audioLibraryService'); 
         audioLibraryService.offScanNotify(cbScanNotify);
         audioLibraryService.offGroupStatsUpdate(cbGroupStatsUpdate);
