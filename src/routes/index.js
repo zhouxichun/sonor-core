@@ -3,6 +3,7 @@ const SystemService = require('../services/SystemService');
 const AudioLibraryService = require('../services/AudioLibraryService');
 const PlayerService = require('../services/PlayerService');
 const PlaylistService = require('../services/PlaylistService');
+const LyricService = require('../services/LyricService');
 const UsbService = require('../services/UsbService');
 const logger = require('../utils/logger')('routes');
 const { customAlphabet } = require('nanoid');
@@ -13,9 +14,10 @@ async function routes(fastify) {
     const playlistService =  new PlaylistService();
     const playerService =  new PlayerService();
     const usbService = new UsbService();
-    let serviceReady = false;
+    const lyricService = new LyricService();
 
-    // ========== 【重点】全部回调放到最前面定义 ==========
+    let serviceReady = false;
+    // ========== 全部回调放到最前面定义 ==========
     const cbScanNotify = payload => BroadcastService.broadcastNotify(payload.message, payload.level);
     const cbGroupStatsUpdate = (data) => {
         serviceReady = true;
@@ -90,13 +92,14 @@ async function routes(fastify) {
         audioLibraryService.GroupStats();
     }
 
+    const cbLyricLoaded = payload => {
+        const {uuid,data} = payload;
+        if(data && data.lrc)
+            BroadcastService.broadcast({type:'lyric_loaded', data:{uuid:uuid, lyric:data.lrc}});
+    }
+
     fastify.addHook('onReady', async () => {
         logger.info('fastify ready, starting business services');
-        audioLibraryService.start();
-        playlistService.start();
-        playerService.start();
-        usbService.start();
-        logger.info('all services ready');
         // 注册监听
         usbService.onDeviceAdded(cbUsbDeviceAdded);
         usbService.onDeviceRemoved(cbUsbDeviceRemoved);
@@ -108,31 +111,45 @@ async function routes(fastify) {
         playerService.onPlayerStatusUpdated(cbPlayerStatusUpdated);
         playerService.onEndFile(cbEndFile);
         playerService.onTimeUpdated(cbTimeUpdated);
+        lyricService.onLyricLoaded(cbLyricLoaded);
+        //启动服务
+        audioLibraryService.start();
+        playlistService.start();
+        playerService.start();
+        usbService.start();
+        lyricService.start();
+        //
+        logger.info('all services ready');
     });
 
     fastify.addHook('preClose', async () => {
+        //
         logger.info('destroying audioLibraryService'); 
         audioLibraryService.offScanNotify(cbScanNotify);
         audioLibraryService.offGroupStatsUpdate(cbGroupStatsUpdate);
         audioLibraryService.offCoverReady(cbCoverReady);
         audioLibraryService.destroy();
-
+        //
         logger.info('destroying playlistService'); 
         playlistService.offPlaylistUpdated(cbPlaylistUpdated);
         playlistService.offCurrentUuid(cbCurrentUuid);
         playlistService.destroy();
-
+        //
         logger.info('destroying playerService'); 
         playerService.offPlayerStatusUpdated(cbPlayerStatusUpdated);
         playerService.offEndFile(cbEndFile);
         playerService.offTimeUpdated(cbTimeUpdated);
         playerService.destroy();
-
+        //
+        logger.info('destroying lyricService'); 
+        lyricService.offLyricLoaded(cbLyricLoaded);
+        lyricService.destroy();
+        //
         logger.info('destroying usbService'); 
         usbService.offDeviceAdded(cbUsbDeviceAdded);
         usbService.offDeviceRemoved(cbUsbDeviceRemoved);
         usbService.destroy();
-
+        //
         logger.info('all services destroyed');
     });
 
@@ -215,6 +232,12 @@ async function routes(fastify) {
                     playerService.setVolume(payload.volume); break;
                 case 'scan-folder':
                     audioLibraryService.scanFolder(payload.folderPath); break;
+                case 'fetch-lyric':
+                    lyricService.fetchLyrics(audioLibraryService.getTrackByUuid(payload.uuid)); break;
+                case 'update-lyric':
+                    audioLibraryService.updateTrackLyric(payload.uuid, payload.lyric); 
+                    BroadcastService.broadcastNotify('歌词已更新');
+                    break;
                 case 'reboot':
                     BroadcastService.notify(clientId, '设备正在重启', 'warn');
                     setTimeout(() => {

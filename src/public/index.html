@@ -34,10 +34,17 @@
     <div class="view-container">
         <!-- 视图1：播放详情 -->
         <div ng-if="viewMode === 'player'" class="tab-view playback-view">
-            <!-- 歌词滚动开关悬浮按钮 -->
-            <button class="lyric-scroll-toggle-btn" ng-click="toggleLyricAutoScroll()" title="切换歌词自动滚动">
-                <i class="fa" ng-class="lyricAutoScroll ? 'fa-lock' : 'fa-unlock'"></i>
-            </button>
+            <div class="float-buttons-wrap">
+                <button debounce-click="toggleLyricAutoScroll()" title="切换歌词自动滚动">
+                    <i class="fa" ng-class="lyricAutoScroll ? 'fa-lock' : 'fa-unlock'"></i>
+                </button>
+                <button debounce-click="fetchLyricOnline()" >
+                    <i class="fa fa-list" title="获取在线歌词"></i>
+                </button>
+                <button debounce-click="updateLyric()" ng-if="lyricChanged" >
+                    <i class="fa fa-save" title="更新本地歌词"></i>
+                </button>
+            </div>
             <!-- 固定头部meta区域 -->
             <div class="lyric-meta">
                 <div class="lyric-meta-title">{{currentTrack.title}}</div>
@@ -67,9 +74,6 @@
             <div class="playlist-header">
                 <h4>当前播放列表 ({{playlist.length}})</h4>
                 <div class="playlist-header-buttons">
-                    <button ng-click="loadPlaylist()" title="刷新">
-                        <i class="fa fa-refresh"></i>
-                    </button>
                     <button ng-click="clearPlaylist()" title="清空列表">
                         <i class="fa fa-trash"></i>
                     </button>

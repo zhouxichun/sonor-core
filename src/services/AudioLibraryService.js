@@ -458,5 +458,32 @@ class AudioLibraryService extends SonorService {
         this.emit(AudioLibraryService.EVENTS.GROUP_STATS, this.#groupStats);
     }
 
+   /**
+     * 更新音频库内曲目歌词
+     * @param {string} uuid 曲目唯一id
+     * @param {Object|null} lyric 歌词对象，结构 {lrc, plain, lines}，无歌词传null
+     */
+    updateTrackLyric(uuid, lyric) {
+
+        let targetTrack = null;
+        let parentFolderItem = null;
+        for (const folderItem of this.#audios) {
+            targetTrack = folderItem.traces.find(t => t.uuid === uuid);
+            if (targetTrack) {
+                parentFolderItem = folderItem;
+            break;
+            }
+        }
+
+        if (!targetTrack) {
+            logger.warn('track not found, update lyric pass', uuid);
+            return;
+        }
+
+        targetTrack.lyric = lyric;
+        logger.info('track lyric updated', uuid);
+        this.#saveLibrary();
+    }
+
 }
 module.exports = AudioLibraryService;

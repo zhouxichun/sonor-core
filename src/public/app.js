@@ -32,7 +32,7 @@ app.controller('MainCtrl',['$scope','$timeout',function($scope,$timeout){
     $scope.parsedLyric = [];
     $scope.lyricAutoScroll = true;
     $scope.showCoverPopup = false;
-
+    $scope.lyricChanged = false;
     // ====================== 设置相关 ======================
     $scope.folderList = [];
 
@@ -195,6 +195,7 @@ app.controller('MainCtrl',['$scope','$timeout',function($scope,$timeout){
             $scope.totalTime = $scope.currentTrack.duration || 0;
             $scope.progressPercent = $scope.totalTime > 0 ? ($scope.currentTime / $scope.totalTime)*100 : 0;
             $scope.parsedLyric = parseLrc($scope.currentTrack.lyric);
+            $scope.lyricChanged = false;
             $scope.scrollToCurrentPlaying();
         });
     })
@@ -253,7 +254,18 @@ app.controller('MainCtrl',['$scope','$timeout',function($scope,$timeout){
     })
     .on('notification', payload => {
        $scope.$evalAsync(()=>{ $scope.showToast(payload); }); 
-    });
+    })
+    .on('lyric_loaded', data => {
+        const { uuid, lyric } = data;
+        if( $scope.currentTrack && $scope.currentTrack.uuid === uuid ){
+            $scope.$evalAsync(()=>{ 
+                $scope.parsedLyric = parseLrc(lyric); 
+                $scope.currentTrack.lyric = lyric;
+                $scope.lyricChanged = true;
+            }); 
+        }
+    })
+    ;
 
     // ====================== 播放 ======================
     /**
@@ -289,6 +301,9 @@ app.controller('MainCtrl',['$scope','$timeout',function($scope,$timeout){
         WsService.sendCommand('play-seek',{pos:targetSec});
     };
     
+    $scope.fetchLyricOnline = function(){ WsService.sendCommand('fetch-lyric', {uuid:$scope.currentTrack.uuid}) };
+    $scope.updateLyric = function(){ WsService.sendCommand('update-lyric', {uuid:$scope.currentTrack.uuid, lyric:$scope.currentTrack.lyric}) };
+
     // ====================== 播放列表 ======================
 
     /**
